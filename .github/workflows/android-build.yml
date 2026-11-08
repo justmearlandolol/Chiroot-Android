@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build:
     name: Tests, lint and icon-checked APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -26,25 +26,41 @@ jobs:
       CHIROOT_VERSION_CODE: ${{ github.run_number }}
     steps:
       - name: Checkout complete source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v4
+        uses: gradle/actions/wrapper-validation@v6
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android 35 platform and build tools
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Configure Android SDK explicitly
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          mkdir -p "$SDK_ROOT/cmdline-tools"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          if [ ! -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            curl --fail --location --retry 3 \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+              --output /tmp/chiroot-commandline-tools.zip
+            unzip -q /tmp/chiroot-commandline-tools.zip -d /tmp/chiroot-commandline-tools
+            mv /tmp/chiroot-commandline-tools/cmdline-tools "$SDK_ROOT/cmdline-tools/latest"
+          fi
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          export PATH="$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --licenses > /tmp/chiroot-sdk-licenses.log 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager --list_installed
 
       - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.9'
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
@@ -53,17 +69,22 @@ jobs:
         run: python3 tools/verify_project.py
 
       - name: Run JVM tests and Android lint
-        run: ./gradlew :app:testDebugUnitTest :app:lintDebug --no-daemon --stacktrace
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :app:testDebugUnitTest :app:lintDebug --no-daemon --stacktrace --console=plain 2>&1 | tee gradle-check.log
 
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee gradle-apk.log
 
       - name: Verify APK package and embedded launcher icons
         run: python3 tools/verify_apk.py app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload installable APK
-        if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chiroot-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
@@ -73,10 +94,12 @@ jobs:
 
       - name: Upload test and lint reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chiroot-build-reports
           path: |
+            gradle-check.log
+            gradle-apk.log
             app/build/reports/tests/
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml

@@ -1820,8 +1820,8 @@ public class MainActivity extends AppCompatActivity {
                     .registerOnSharedPreferenceChangeListener(dspListener);
 
             session = new MediaSession.Builder(this, exo)
-                    .setBitmapLoader(new androidx.media3.common.util.CacheBitmapLoader(
-                            new androidx.media3.common.util.SimpleBitmapLoader()))
+                    .setBitmapLoader(new androidx.media3.session.CacheBitmapLoader(
+                            new androidx.media3.session.SimpleBitmapLoader()))
                     .setSessionActivity(pendingIntentForApp())
                     .build();
 
