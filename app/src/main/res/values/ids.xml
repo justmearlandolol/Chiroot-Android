@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="error_card" type="id" />
+    <item name="error_detail" type="id" />
+    <item name="error_retry" type="id" />
+</resources>

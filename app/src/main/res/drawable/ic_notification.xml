@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome rendition of the supplied Chiroot mark for Android's status bar.
+     The launcher itself uses the original favicon.png, not this silhouette. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="64" android:viewportHeight="64">
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd"
+        android:pathData="M34,5 L28,22 L10,16 L21,31 L5,41 L26,41 L29,59 L37,42 L54,49 L46,34 L60,24 L41,25 Z M26,30 a3,6 0,1 0,6 0 a3,6 0,1 0,-6 0 M36,30 a3,6 0,1 0,6 0 a3,6 0,1 0,-6 0" />
+</vector>

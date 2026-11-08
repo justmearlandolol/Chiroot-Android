@@ -1,0 +1,123 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Environment variables (GitHub Actions) > untracked local.properties >
+// public Chiroot website defaults. A debug APK builds without GitHub Secrets.
+// Only a publishable/anon key may ever be embedded in an Android APK.
+def localSettings = new Properties()
+def localFile = rootProject.file('local.properties')
+if (localFile.exists()) {
+    localFile.withInputStream { localSettings.load(it) }
+}
+def setting = { String name, String fallback ->
+    def value = System.getenv(name)
+    if (value == null || value.trim().isEmpty()) value = project.findProperty(name)
+    if (value == null || value.toString().trim().isEmpty()) value = localSettings.getProperty(name)
+    return value == null || value.toString().trim().isEmpty() ? fallback : value.toString().trim()
+}
+def supabaseUrl = setting('SUPABASE_URL', 'https://astuagdezahmuuwjoghf.supabase.co').replaceAll('/+$', '')
+def supabaseKey = setting('SUPABASE_ANON_KEY', 'sb_publishable_NXhR-MquEMwYDrCBPAOgAQ_MZ4BXQlT')
+def releaseRedirect = setting('SUPABASE_REDIRECT_URI', 'id.my.chiroot://auth-callback')
+def redirect = new URI(releaseRedirect)
+if (!(redirect.scheme ==~ /[a-z][a-z0-9+.-]*/) || redirect.host == null) {
+    throw new GradleException('SUPABASE_REDIRECT_URI must be a custom Android deep link, e.g. id.my.chiroot://auth-callback')
+}
+def debugScheme = redirect.scheme + '.debug'
+def debugRedirect = debugScheme + '://' + redirect.host + (redirect.rawPath ?: '')
+def quoted = { String value -> '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"' }
+if (supabaseKey.startsWith('eyJ')) {
+    try {
+        def parts = supabaseKey.split('\\.')
+        def payload = new groovy.json.JsonSlurper().parseText(new String(Base64.urlDecoder.decode(parts[1]), 'UTF-8'))
+        if (payload.role != 'anon') throw new GradleException('Only the Supabase anon key is allowed; never use service_role.')
+    } catch (GradleException e) {
+        throw e
+    } catch (Exception e) {
+        throw new GradleException('SUPABASE_ANON_KEY is not a valid JWT anon key or sb_publishable key.')
+    }
+} else if (!supabaseKey.startsWith('sb_publishable_')) {
+    throw new GradleException('SUPABASE_ANON_KEY must be a publishable/anon key, not a secret key.')
+}
+
+android {
+    namespace 'id.my.chiroot'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'id.my.chiroot'
+        minSdk 29
+        targetSdk 35
+        versionCode setting('CHIROOT_VERSION_CODE', '1').toInteger()
+        versionName '1.0.0'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        manifestPlaceholders = [authScheme: redirect.scheme, authHost: redirect.host]
+        buildConfigField 'String', 'SUPABASE_URL', quoted(supabaseUrl)
+        buildConfigField 'String', 'SUPABASE_ANON_KEY', quoted(supabaseKey)
+        buildConfigField 'String', 'OAUTH_REDIRECT_URI', quoted(releaseRedirect)
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+    aaptOptions {
+        // Keep the supplied/generated PNG bytes intact for artifact verification.
+        cruncherEnabled false
+    }
+
+    signingConfigs {
+        release {
+            def storePath = System.getenv('CHIROOT_KEYSTORE_FILE') ?: project.findProperty('CHIROOT_KEYSTORE_FILE')
+            if (storePath) {
+                storeFile file(storePath)
+                storePassword System.getenv('CHIROOT_KEYSTORE_PASSWORD') ?: project.findProperty('CHIROOT_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('CHIROOT_KEY_ALIAS') ?: project.findProperty('CHIROOT_KEY_ALIAS')
+                keyPassword System.getenv('CHIROOT_KEY_PASSWORD') ?: project.findProperty('CHIROOT_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // Separate identity, OAuth scheme and file-provider authority: a debug
+            // install can never steal the release app's login callback.
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+            manifestPlaceholders = [authScheme: debugScheme, authHost: redirect.host]
+            buildConfigField 'String', 'OAUTH_REDIRECT_URI', quoted(debugRedirect)
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            if (System.getenv('CHIROOT_KEYSTORE_FILE') || project.hasProperty('CHIROOT_KEYSTORE_FILE')) {
+                signingConfig signingConfigs.release
+            }
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    packaging {
+        resources {
+            excludes += ['/META-INF/{AL2.0,LGPL2.1}', 'META-INF/*.kotlin_module']
+        }
+    }
+    lint {
+        abortOnError true
+        warningsAsErrors false
+        checkReleaseBuilds true
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.media3:media3-session:1.4.1'
+    implementation 'androidx.media3:media3-ui:1.4.1'
+    implementation 'androidx.media3:media3-common:1.4.1'
+    implementation 'com.google.android.material:material:1.12.0'
+    testImplementation 'junit:junit:4.13.2'
+}

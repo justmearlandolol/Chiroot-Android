@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Chiroot" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="android:fontFamily">@font/chiroot_body</item>
+        <item name="fontFamily">@font/chiroot_body</item>
+        <item name="colorPrimary">#D84A3A</item>
+        <item name="colorPrimaryVariant">#A66B3A</item>
+        <item name="colorSecondary">#3A8A6A</item>
+        <item name="android:colorAccent">#D84A3A</item>
+        <item name="android:windowBackground">#F7F3E9</item>
+        <item name="android:statusBarColor">#F7F3E9</item>
+        <item name="android:navigationBarColor">#F7F3E9</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <style name="ChirootDialog" parent="Theme.MaterialComponents.Light.Dialog">
+        <item name="android:fontFamily">@font/chiroot_body</item>
+        <item name="fontFamily">@font/chiroot_body</item>
+        <item name="colorPrimary">#D84A3A</item>
+        <item name="colorAccent">#D84A3A</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.45</item>
+    </style>
+</resources>

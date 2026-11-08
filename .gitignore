@@ -1,0 +1,18 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+__pycache__/
+*.pyc
+.venv/
+# Never commit signing material or local environment overrides.
+*.jks
+*.keystore
+.env
+.env.*
+keystore.properties
