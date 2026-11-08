@@ -1689,8 +1689,8 @@ public class MainActivity extends AppCompatActivity {
         } else if (requestCode == REQ_PICK_AVATAR && uri != null) {
             runIo(() -> {
                 try {
-                    String data = compressProfileImage(readBytes(uri, 5));
-                    runUi(() -> { pendingAvatarDataUrl = data; showProfileDialog(); });
+                    String avatarData = compressProfileImage(readBytes(uri, 5));
+                    runUi(() -> { pendingAvatarDataUrl = avatarData; showProfileDialog(); });
                 } catch (Exception e) {
                     runUi(() -> toast("Foto tidak valid atau terlalu besar. Maksimal 5 MB."));
                 }
@@ -2761,7 +2761,7 @@ public class MainActivity extends AppCompatActivity {
         int current = controller.getCurrentMediaItemIndex();
         for (int i = Math.max(0, current); i < controller.getMediaItemCount(); i++) {
             final int index = i;
-            MediaItem item = controller.getMediaItem(i);
+            MediaItem item = controller.getMediaItemAt(i);
             Track t = findTrack(item.mediaId);
             LinearLayout r = row();
             LinearLayout labels = column();
@@ -2968,7 +2968,7 @@ public class MainActivity extends AppCompatActivity {
             if (controller == null) return;
             int from = -1;
             for (int i = 0; i < controller.getMediaItemCount(); i++) {
-                if (t.id.equals(controller.getMediaItem(i).mediaId)) { from = i; break; }
+                if (t.id.equals(controller.getMediaItemAt(i).mediaId)) { from = i; break; }
             }
             int current = controller.getCurrentMediaItemIndex();
             if (from >= 0 && from != current && controller.getMediaItemCount() > 1) {
