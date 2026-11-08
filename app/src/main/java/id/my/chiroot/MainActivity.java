@@ -339,7 +339,7 @@ public class MainActivity extends AppCompatActivity {
      * ===================================================================== */
 
     /** Keeps every modal usable in landscape and on small phones. */
-    static class ResponsiveScrollView extends ScrollView {
+    class ResponsiveScrollView extends ScrollView {
         ResponsiveScrollView(Context context) { super(context); }
         @Override protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
             int maxHeight = Math.max(dp(180), (int) (getResources().getDisplayMetrics().heightPixels * 0.76f));
