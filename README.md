@@ -38,12 +38,12 @@ Semua screen aplikasi dibuat dengan View Android dari Java. Tidak ada Kotlin apl
 ## Fitur
 
 - Google OAuth melalui Supabase di browser sistem, PKCE S256, deep link terpisah debug/release, pemulihan sesi dan logout; mode tamu untuk file lokal.
-- Dashboard, Now Playing, mini player, vinyl Canvas, play/pause, previous/next, seek, volume/mute, shuffle/repeat, antrean dan pencarian crate.
+- Dashboard, Now Playing, mini player, vinyl Canvas, play/pause, previous/next, seek, volume/mute, shuffle/repeat, antrean yang bisa diatur, sort judul/artis, recently played, favorit, dan pencarian crate.
 - MediaSessionService: satu ExoPlayer milik service, notifikasi media, kontrol lock screen/headset, audio focus dan penanganan headphone terputus.
-- The Crate Supabase, pilih MP3 melalui Storage Access Framework, cover, warna vinyl/label, upload dan retry dengan ID/path stabil.
+- The Crate Supabase, pilih MP3 melalui Storage Access Framework, cover, warna vinyl/label, validasi MP3, deteksi duplikat hash, pembatalan best-effort, dan upload/retry dengan ID/path stabil. Progress jaringan ditampilkan indeterminate, bukan persen palsu.
 - Quick Auto-fill dari nama file; metadata manual tetap tersedia.
 - Poster Canvas, redraw, berbagi PNG, menyalin poster, dan ekspor SVG mandiri.
-- Riwayat/listening report dari kejadian playback nyata, lirik LRCLIB dengan empty state, profil dan pengaturan.
+- Riwayat/listening report dari kejadian playback nyata, lirik LRCLIB dengan empty state, foto profil/banner warna, serta pengaturan yang disinkronkan ke Supabase.
 - EQ gramofon opsional pada sesi audio ExoPlayer, dengan status dukungan sebenarnya.
 - Backup/restore ZIP tanpa token, konfirmasi reset/hapus, patch notes dan credits.
 - Modal error reusable dengan ilustrasi asli, **Try Again** yang mengulang operasi gagal, dan **Close**; offline/timeout/5xx dibedakan dari kesalahan input, izin, sesi, atau pembatalan login.
@@ -83,7 +83,7 @@ Generator menjaga seluruh tanda bintang di safe zone adaptive icon. PNG asli jug
 
 ### Tabel dan kompatibilitas website
 
-Migration memakai nama yang benar-benar dipakai source website Chiroot: `profiles`, `crate_tracks`, dan `play_events`, serta menambahkan `user_settings`. Profil memakai `display_name`, `pfp`, `description`, dan `banner_color`; bukan kolom baru yang tidak dikenal website. `play_events.duration_ms` menyimpan durasi mendengar nyata. Indeks dan RLS kepemilikan disertakan.
+Migration memakai nama yang benar-benar dipakai source website Chiroot: `profiles`, `crate_tracks`, dan `play_events`, serta menambahkan `user_settings` dan `favorite_tracks`. Kolom hash opsional mencegah duplikat audio per pengguna tanpa merusak row website lama. Profil memakai `display_name`, `pfp`, `description`, dan `banner_color`; bukan kolom baru yang tidak dikenal website. `play_events.duration_ms` menyimpan durasi mendengar nyata. Service menghitung waktu hanya saat `isPlaying`, bukan saat buffering/pause, dan membuat checkpoint walau Activity tidak terlihat. Checkpoint offline disimpan dalam outbox ber-ID stabil lalu di-upsert ketika aplikasi kembali online/terbuka; tidak ada statistik karangan. Indeks dan RLS kepemilikan disertakan.
 
 **Privasi storage:** website Chiroot saat ini memakai bucket publik dan public object URL. Migration mempertahankan kompatibilitas itu; write tetap owner-only. Siapa pun yang memperoleh URL audio publik dapat membacanya. Jangan menganggap path acak sebagai proteksi. Untuk koleksi privat, seluruh klien (Android dan website) harus diubah bersama ke bucket privat + signed URL sebelum mengubah policy/bucket. Jangan sekadar menonaktifkan public access lalu berharap website lama tetap bekerja.
 
@@ -142,7 +142,7 @@ Modal dipakai untuk operasi yang diminta pengguna ketika koneksi/server gagal. C
 
 ## Backup, poster, dan sumber desain
 
-Backup ZIP berisi metadata crate, riwayat, preferensi, dan profil; **tidak berisi access/refresh token atau audio biner**. File lokal tetap berada di lokasi asalnya. Restore menggabungkan data dengan deduplikasi dan meminta konfirmasi. Poster PNG dibagikan melalui FileProvider; SVG ditulis sebagai dokumen XML mandiri.
+Backup ZIP berisi metadata crate, riwayat, preferensi, dan profil; **tidak berisi access/refresh token atau audio biner**. File lokal tetap berada di lokasi asalnya. Restore menggabungkan data dengan deduplikasi dan meminta konfirmasi. Poster PNG dibagikan melalui FileProvider dan dapat disalin sebagai gambar bila aplikasi tujuan mendukung. SVG ditulis sebagai dokumen XML mandiri dengan cover tertanam data URI, bukan link ke file privat perangkat.
 
 URL asli `https://chiroot.my.id/Main.html` tidak dapat diakses langsung dari lingkungan kerja ini. Penelitian visual dilakukan dari source `Main.html` pada repo GitHub `justmearlandolol/Chiroot-Website`: palet kertas/tinta/kayu, font Patrick Hand/Kalam/Caveat, hirarki gramofon, dan fitur crate/profil dipetakan dari source tersebut. Font dibundel agar UI tidak bergantung pada website/font CDN. Tidak ada klaim bahwa screenshot situs langsung sudah diperiksa.
 

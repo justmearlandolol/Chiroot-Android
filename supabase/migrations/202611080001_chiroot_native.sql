@@ -37,6 +37,8 @@ create table if not exists public.crate_tracks (
   created_at timestamptz not null default now()
 );
 alter table public.crate_tracks add column if not exists duration_ms bigint not null default 0;
+alter table public.crate_tracks add column if not exists content_hash text;
+create unique index if not exists crate_tracks_user_hash_idx on public.crate_tracks(user_id, content_hash) where content_hash is not null;
 alter table public.crate_tracks add column if not exists audio_url text;
 alter table public.crate_tracks add column if not exists audio_path text;
 alter table public.crate_tracks add column if not exists cover_path text;
@@ -63,6 +65,18 @@ create table if not exists public.user_settings (
   settings_json jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
 );
+
+create table if not exists public.favorite_tracks (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  track_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, track_id)
+);
+alter table public.favorite_tracks enable row level security;
+drop policy if exists chiroot_favorites_own on public.favorite_tracks;
+create policy chiroot_favorites_own on public.favorite_tracks
+  for all to authenticated using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
 
 alter table public.profiles enable row level security;
 alter table public.crate_tracks enable row level security;

@@ -39,6 +39,11 @@ public class MainActivityTest {
         assertEquals("ab…", MainActivity.trim("abcd", 3));
     }
 
+    @Test public void audioHashMatchesKnownSha256Vector() {
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                MainActivity.sha256Bytes("abc".getBytes(StandardCharsets.UTF_8)));
+    }
+
     @Test public void backupIsARealZipWithJsonEntry() throws Exception {
         byte[] zip = MainActivity.zipBytes("{\"app\":\"Chiroot Android\"}");
         assertTrue(zip.length > 4);

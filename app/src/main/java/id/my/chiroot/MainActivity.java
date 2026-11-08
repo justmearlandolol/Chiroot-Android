@@ -58,6 +58,8 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Space;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -104,6 +106,9 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -168,6 +173,7 @@ public class MainActivity extends AppCompatActivity {
     static final int REQ_SAVE_BACKUP = 4104;
     static final int REQ_OPEN_BACKUP = 4105;
     static final int REQ_NOTIF = 4106;
+    static final int REQ_PICK_AVATAR = 4107;
 
     static final String DEFAULT_LABEL = "#D84A3A";
     static final String DEFAULT_VINYL = "#1E1E24";
@@ -196,6 +202,9 @@ public class MainActivity extends AppCompatActivity {
     // Library + playback model
     final List<Track> crate = new ArrayList<>();
     final List<Hist> history = new ArrayList<>();
+    final Set<String> favoriteIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    int crateSort = 0;
+    View crateSection;
     String currentTrackId = "";
     int playingIndex = -1;
     boolean shuffleOn = false;
@@ -208,7 +217,10 @@ public class MainActivity extends AppCompatActivity {
     // Playback
     MediaController controller;
     boolean controllerConnecting = false;
-    long playStartedAt = 0L;
+    static final Object HISTORY_DISK_LOCK = new Object();
+    final Object outboxLock = new Object();
+    boolean outboxSyncing = false;
+    SharedPreferences.OnSharedPreferenceChangeListener historyListener;
 
     // Root UI
     FrameLayout root;
@@ -244,6 +256,11 @@ public class MainActivity extends AppCompatActivity {
     ProgressBar uploadBar;
     TextView uploadLabel;
     boolean uploading = false;
+    volatile boolean uploadCancelled = false;
+    String draftTitle = "", draftArtist = "";
+    String pendingAvatarDataUrl = "";
+    String profileDraftName = "", profileDraftBio = "";
+    boolean profileDraftActive = false;
     String pendingUploadId = "";
     String pendingSvgForSave = "";
     String pendingBackupForSave = "";
@@ -281,12 +298,22 @@ public class MainActivity extends AppCompatActivity {
     protected void onStart() {
         super.onStart();
         if (controller == null && !controllerConnecting) connectController();
+        loadLocalHistory();
+        if (historyListener == null) {
+            historyListener = (sp, key) -> {
+                if (historyKey().equals(key)) runUi(() -> { loadLocalHistory(); renderTop5(); });
+            };
+            prefs.registerOnSharedPreferenceChangeListener(historyListener);
+        }
     }
 
     @Override
     protected void onStop() {
         super.onStop();
-        if (playStartedAt > 0) flushListenSession();
+        if (historyListener != null) {
+            prefs.unregisterOnSharedPreferenceChangeListener(historyListener);
+            historyListener = null;
+        }
     }
 
     @Override
@@ -297,6 +324,7 @@ public class MainActivity extends AppCompatActivity {
             if (am != null) am.unregisterAudioDeviceCallback(deviceCallback);
             deviceCallback = null;
         }
+        if (historyListener != null) prefs.unregisterOnSharedPreferenceChangeListener(historyListener);
         if (ticker != null) ui.removeCallbacks(ticker);
         ticker = null;
         if (controller != null) controller.release();
@@ -573,6 +601,7 @@ public class MainActivity extends AppCompatActivity {
         String audioUrl = "";
         String coverUrl = "";
         String audioPath = "";
+        String contentHash = "";
         String coverPath = "";
         String labelColor = DEFAULT_LABEL;
         String vinylColor = DEFAULT_VINYL;
@@ -587,6 +616,7 @@ public class MainActivity extends AppCompatActivity {
             o.put("audioUrl", audioUrl);
             o.put("coverUrl", coverUrl);
             o.put("audioPath", audioPath);
+            o.put("contentHash", contentHash);
             o.put("coverPath", coverPath);
             o.put("labelColor", labelColor);
             o.put("vinylColor", vinylColor);
@@ -603,6 +633,7 @@ public class MainActivity extends AppCompatActivity {
             t.audioUrl = o.optString("audioUrl");
             t.coverUrl = o.optString("coverUrl");
             t.audioPath = o.optString("audioPath");
+            t.contentHash = o.optString("contentHash");
             t.coverPath = o.optString("coverPath");
             t.labelColor = safeColor(o.optString("labelColor"), DEFAULT_LABEL);
             t.vinylColor = safeColor(o.optString("vinylColor"), DEFAULT_VINYL);
@@ -613,6 +644,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     static class Hist {
+        String id = "";
         String trackId = "";
         String title = "";
         String artist = "";
@@ -621,6 +653,7 @@ public class MainActivity extends AppCompatActivity {
 
         JSONObject toJson() throws JSONException {
             JSONObject o = new JSONObject();
+            o.put("id", id);
             o.put("trackId", trackId);
             o.put("title", title);
             o.put("artist", artist);
@@ -631,6 +664,7 @@ public class MainActivity extends AppCompatActivity {
 
         static Hist fromJson(JSONObject o) {
             Hist h = new Hist();
+            h.id = o.optString("id");
             h.trackId = o.optString("trackId");
             h.title = o.optString("title");
             h.artist = o.optString("artist");
@@ -653,8 +687,10 @@ public class MainActivity extends AppCompatActivity {
         userName = prefs.getString("user_name", "");
         userAvatar = prefs.getString("user_avatar", "");
         profileBio = prefs.getString("user_bio", "");
+        profileBanner = safeColor(prefs.getString("user_banner", DEFAULT_LABEL), DEFAULT_LABEL);
         guestMode = accessToken.isEmpty() || userId.isEmpty();
         loadCrateCache();
+        loadFavorites();
     }
 
     void saveSession() {
@@ -667,6 +703,7 @@ public class MainActivity extends AppCompatActivity {
                 .putString("user_name", userName)
                 .putString("user_avatar", userAvatar)
                 .putString("user_bio", profileBio)
+                .putString("user_banner", profileBanner)
                 .apply();
     }
 
@@ -679,10 +716,11 @@ public class MainActivity extends AppCompatActivity {
         userName = "";
         userAvatar = "";
         profileBio = "";
+        profileBanner = DEFAULT_LABEL;
         guestMode = true;
         prefs.edit().remove(K_ACCESS).remove(K_REFRESH).remove(K_EXPIRES)
                 .remove("user_id").remove("user_email").remove("user_name")
-                .remove("user_avatar").remove("user_bio").apply();
+                .remove("user_avatar").remove("user_bio").remove("user_banner").apply();
     }
 
     void loadSettings() {
@@ -699,16 +737,39 @@ public class MainActivity extends AppCompatActivity {
             JSONObject o = new JSONObject();
             o.put("dsp", dspEnabled);
             o.put("spin", showVinylSpin);
-            prefs.edit().putString(K_SETTINGS, o.toString()).apply();
+            prefs.edit().putString(K_SETTINGS, o.toString())
+                    .putLong("settings_updated_at", System.currentTimeMillis()).apply();
+            if (!guestMode) syncSettingsToCloud(o.toString());
         } catch (JSONException ignored) {
         }
     }
+
+    void syncSettingsToCloud(String json) {
+        if (guestMode || userId.isEmpty()) return;
+        String owner = userId;
+        runIo(() -> {
+            try {
+                JSONObject row = new JSONObject();
+                row.put("user_id", owner);
+                row.put("settings_json", new JSONObject(json));
+                row.put("updated_at", nowIso());
+                restUpsert("user_settings", row);
+            } catch (Exception e) {
+                runUi(() -> showOperationError(e, "Pengaturan belum tersinkron", () -> syncSettingsToCloud(json)));
+            }
+        });
+    }
+
+    String crateCacheKey() { return guestMode || userId.isEmpty() ? "tracks_guest" : "tracks_" + userId; }
+    String historyKey() { return guestMode || userId.isEmpty() ? "history_guest" : "history_" + userId; }
+    String outboxKey() { return guestMode || userId.isEmpty() ? "" : "history_outbox_" + userId; }
+    String favoritesKey() { return guestMode || userId.isEmpty() ? "favorites_guest" : "favorites_" + userId; }
 
     /** Crate cache: guests keep their library locally, signed-in users get an offline cache. */
     void loadCrateCache() {
         crate.clear();
         try {
-            JSONArray arr = new JSONArray(prefs.getString(K_TRACKS, "[]"));
+            JSONArray arr = new JSONArray(prefs.getString(crateCacheKey(), "[]"));
             for (int i = 0; i < arr.length(); i++) {
                 Track t = Track.fromJson(arr.getJSONObject(i));
                 if (!TextUtils.isEmpty(t.title)) crate.add(t);
@@ -725,13 +786,13 @@ public class MainActivity extends AppCompatActivity {
             } catch (JSONException ignored) {
             }
         }
-        prefs.edit().putString(K_TRACKS, arr.toString()).apply();
+        prefs.edit().putString(crateCacheKey(), arr.toString()).apply();
     }
 
     void loadLocalHistory() {
         history.clear();
         try {
-            JSONArray arr = new JSONArray(prefs.getString(K_HISTORY, "[]"));
+            JSONArray arr = new JSONArray(prefs.getString(historyKey(), "[]"));
             for (int i = 0; i < arr.length(); i++) history.add(Hist.fromJson(arr.getJSONObject(i)));
         } catch (JSONException ignored) {
         }
@@ -745,7 +806,59 @@ public class MainActivity extends AppCompatActivity {
             } catch (JSONException ignored) {
             }
         }
-        prefs.edit().putString(K_HISTORY, arr.toString()).apply();
+        synchronized (HISTORY_DISK_LOCK) {
+            prefs.edit().putString(historyKey(), arr.toString()).apply();
+        }
+    }
+
+    void loadFavorites() {
+        favoriteIds.clear();
+        favoriteIds.addAll(prefs.getStringSet(favoritesKey(), new HashSet<>()));
+    }
+
+    void saveFavorites() {
+        prefs.edit().putStringSet(favoritesKey(), new HashSet<>(favoriteIds)).apply();
+    }
+
+    void loadFavoritesFromCloudBlocking() throws ApiException {
+        if (guestMode) return;
+        JSONArray rows = restArray("GET", "favorite_tracks?select=track_id&user_id=eq." + enc(userId), null);
+        favoriteIds.clear();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row != null) favoriteIds.add(row.optString("track_id"));
+        }
+        saveFavorites();
+    }
+
+    void setFavorite(Track t, boolean favorite) {
+        if (guestMode) {
+            if (favorite) favoriteIds.add(t.id); else favoriteIds.remove(t.id);
+            saveFavorites();
+            renderDashboard();
+            toast(favorite ? "Ditambahkan ke favorit." : "Dihapus dari favorit.");
+            return;
+        }
+        runIo(() -> {
+            try {
+                if (favorite) {
+                    JSONObject row = new JSONObject();
+                    row.put("user_id", userId);
+                    row.put("track_id", t.id);
+                    restUpsert("favorite_tracks", row);
+                } else {
+                    rest("DELETE", "favorite_tracks?user_id=eq." + enc(userId) + "&track_id=eq." + enc(t.id), null);
+                }
+                runUi(() -> {
+                    if (favorite) favoriteIds.add(t.id); else favoriteIds.remove(t.id);
+                    saveFavorites();
+                    renderDashboard();
+                    toast(favorite ? "Ditambahkan ke favorit." : "Dihapus dari favorit.");
+                });
+            } catch (Exception e) {
+                runUi(() -> showOperationError(e, "Favorit belum tersimpan", () -> setFavorite(t, favorite)));
+            }
+        });
     }
 
     Track findTrack(String id) {
@@ -1100,12 +1213,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /** POST that merges on the primary key — safe to retry after a failure. */
-    void restUpsert(String table, JSONObject body) throws ApiException {
+    JSONArray restUpsert(String table, JSONObject body) throws ApiException {
         ensureFreshToken();
         Map<String, String> h = supabaseHeaders();
         h.put("Prefer", "resolution=merge-duplicates,return=representation");
         Resp r = http("POST", SUPABASE_URL + "/rest/v1/" + table, body, h, null, null);
         if (r.status >= 400) throw classify(r.status, r.body);
+        try {
+            return TextUtils.isEmpty(r.body) ? new JSONArray() : new JSONArray(r.body);
+        } catch (JSONException e) {
+            throw new ApiException(r.status, "server", "Respons penyimpanan tidak valid.");
+        }
     }
 
     JSONArray restArray(String method, String path, @Nullable JSONObject body) throws ApiException {
@@ -1266,7 +1384,10 @@ public class MainActivity extends AppCompatActivity {
                 userAvatar = meta.optString("avatar_url", userAvatar);
             }
         }
-        guestMode = TextUtils.isEmpty(accessToken);
+        if (TextUtils.isEmpty(accessToken) || TextUtils.isEmpty(userId)) {
+            throw new JSONException("Respons sesi tidak lengkap.");
+        }
+        guestMode = false;
         saveSession();
     }
 
@@ -1313,9 +1434,15 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception ignored) {
             }
         });
+        if (controller != null) {
+            controller.pause();
+            controller.clearMediaItems();
+        }
+        currentTrackId = "";
         clearSession();
-        crate.clear();
-        saveCrateCache();
+        loadCrateCache();
+        loadLocalHistory();
+        loadFavorites();
         refreshAppBar();
         updatePlayerUi();
         showAuthGate();
@@ -1353,12 +1480,34 @@ public class MainActivity extends AppCompatActivity {
                 fail = e;
             }
             try {
+                JSONArray settings = restArray("GET", "user_settings?select=*&user_id=eq." + enc(userId) + "&limit=1", null);
+                if (settings.length() > 0) {
+                    JSONObject row = settings.getJSONObject(0);
+                    long remoteAt = parseTimestamp(row.optString("updated_at"));
+                    if (remoteAt > prefs.getLong("settings_updated_at", 0L)) {
+                        JSONObject value = row.optJSONObject("settings_json");
+                        if (value != null) {
+                            dspEnabled = value.optBoolean("dsp", dspEnabled);
+                            showVinylSpin = value.optBoolean("spin", showVinylSpin);
+                            prefs.edit().putString(K_SETTINGS, value.toString())
+                                    .putLong("settings_updated_at", remoteAt).apply();
+                        }
+                    }
+                }
+            } catch (Exception ignored) { }
+            try {
                 loadCrateFromCloudBlocking();
             } catch (Exception e) {
                 if (fail == null) fail = e;
             }
             try {
+                flushHistoryOutboxBlocking();
                 loadHistoryFromCloudBlocking();
+            } catch (Exception historyError) {
+                android.util.Log.w(TAG, "History sync deferred: " + historyError.getClass().getSimpleName());
+            }
+            try {
+                loadFavoritesFromCloudBlocking();
             } catch (Exception ignored) {
             }
             if (fail != null) android.util.Log.w(TAG, "loadCloudData: " + fail.getMessage());
@@ -1405,6 +1554,7 @@ public class MainActivity extends AppCompatActivity {
             t.labelColor = safeColor(o.optString("label_color"), DEFAULT_LABEL);
             t.vinylColor = safeColor(o.optString("vinyl_color"), DEFAULT_VINYL);
             t.audioPath = o.optString("audio_path", "");
+            t.contentHash = o.optString("content_hash", "");
             t.coverPath = o.optString("cover_path", "");
             t.audioUrl = o.optString("audio_url", "");
             if (TextUtils.isEmpty(t.audioUrl) && !TextUtils.isEmpty(t.audioPath)) {
@@ -1442,6 +1592,7 @@ public class MainActivity extends AppCompatActivity {
             JSONObject o = rows.optJSONObject(i);
             if (o == null) continue;
             Hist h = new Hist();
+            h.id = o.optString("id");
             h.trackId = o.optString("track_id");
             h.title = o.optString("title");
             h.artist = o.optString("artist");
@@ -1452,22 +1603,6 @@ public class MainActivity extends AppCompatActivity {
         history.clear();
         history.addAll(loaded);
         saveLocalHistory();
-    }
-
-    void pushPlayEvent(Track t) {
-        if (guestMode || t == null || TextUtils.isEmpty(userId)) return;
-        runIo(() -> {
-            try {
-                JSONObject body = new JSONObject();
-                body.put("user_id", userId);
-                body.put("track_id", t.id);
-                body.put("title", t.title);
-                body.put("artist", t.artist);
-                rest("POST", "play_events", body);
-            } catch (Exception ignored) {
-                // A missed analytics row must never interrupt playback.
-            }
-        });
     }
 
     /* =====================================================================
@@ -1484,6 +1619,34 @@ public class MainActivity extends AppCompatActivity {
         } catch (ActivityNotFoundException e) {
             toast("Tidak ada aplikasi file manager.");
         }
+    }
+
+    void pickAvatar() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("image/*");
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try { startActivityForResult(i, REQ_PICK_AVATAR); }
+        catch (ActivityNotFoundException e) { toast("Tidak ada aplikasi galeri."); }
+    }
+
+    String compressProfileImage(byte[] raw) throws IOException {
+        Bitmap bmp = BitmapFactory.decodeByteArray(raw, 0, raw.length);
+        if (bmp == null) throw new IOException("Foto tidak valid");
+        int max = 256;
+        if (Math.max(bmp.getWidth(), bmp.getHeight()) > max) {
+            float scale = max / (float) Math.max(bmp.getWidth(), bmp.getHeight());
+            bmp = Bitmap.createScaledBitmap(bmp, Math.max(1, Math.round(bmp.getWidth() * scale)),
+                    Math.max(1, Math.round(bmp.getHeight() * scale)), true);
+        }
+        for (int quality : new int[]{85, 72, 60}) {
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            bmp.compress(Bitmap.CompressFormat.JPEG, quality, bo);
+            if (bo.size() < 280000) {
+                return "data:image/jpeg;base64," + Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP);
+            }
+        }
+        throw new IOException("Foto terlalu kompleks untuk disimpan");
     }
 
     void pickCover() {
@@ -1523,6 +1686,15 @@ public class MainActivity extends AppCompatActivity {
             writeBytesToUri(uri, pendingBackupBytes);
         } else if (requestCode == REQ_OPEN_BACKUP && uri != null) {
             restoreBackupFrom(uri);
+        } else if (requestCode == REQ_PICK_AVATAR && uri != null) {
+            runIo(() -> {
+                try {
+                    String data = compressProfileImage(readBytes(uri, 5));
+                    runUi(() -> { pendingAvatarDataUrl = data; showProfileDialog(); });
+                } catch (Exception e) {
+                    runUi(() -> toast("Foto tidak valid atau terlalu besar. Maksimal 5 MB."));
+                }
+            });
         }
     }
 
@@ -1583,115 +1755,101 @@ public class MainActivity extends AppCompatActivity {
     }
 
     void commitAddMusic(JSONObject fields, @Nullable Uri audioUri, @Nullable Uri coverUri) {
-        if (uploading) {
-            toast("Tunggu upload sebelumnya selesai.");
+        if (uploading) { toast("Tunggu upload sebelumnya selesai."); return; }
+        if (audioUri == null || fields.optString("title").trim().isEmpty()) {
+            toast("Pilih MP3 dan isi judul lagu dulu.");
             return;
         }
         uploading = true;
-        if (uploadBar != null) uploadBar.setVisibility(View.VISIBLE);
-        if (uploadLabel != null) uploadLabel.setText("Menyiapkan upload…");
-
-        final String title = fields.optString("title");
-        final String artist = fields.optString("artist");
-        final String label = safeColor(fields.optString("label"), DEFAULT_LABEL);
-        final String vinyl = safeColor(fields.optString("vinyl"), DEFAULT_VINYL);
-        final String localAudioUri = audioUri == null ? "" : audioUri.toString();
-        final String localCoverUri = coverUri == null ? "" : coverUri.toString();
+        uploadCancelled = false;
         if (TextUtils.isEmpty(pendingUploadId)) pendingUploadId = java.util.UUID.randomUUID().toString();
         final String id = pendingUploadId;
-
+        final String title = fields.optString("title").trim();
+        final String artist = fields.optString("artist", "Unknown Artist").trim();
+        final String label = safeColor(fields.optString("label"), DEFAULT_LABEL);
+        final String vinyl = safeColor(fields.optString("vinyl"), DEFAULT_VINYL);
+        setUploadStatus("Membaca file audio…", -1);
         runIo(() -> {
-            byte[] audio = null;
-            byte[] cover = null;
+            String audioPath = "", coverPath = "";
             try {
-                if (audioUri != null) {
-                    setUploadStatus("Membaca file audio…", 8);
-                    audio = readBytes(audioUri, 60);
+                if (uploadCancelled) return;
+                String name = queryDisplayName(audioUri).toLowerCase(Locale.ROOT);
+                String mime = mimeOf(audioUri, "audio/mpeg");
+                if (!name.endsWith(".mp3") && !"audio/mpeg".equals(mime) && !"audio/mp3".equals(mime)) {
+                    throw new IllegalArgumentException("Pilih file MP3 (.mp3).");
                 }
+                byte[] audio = readBytes(audioUri, 60);
+                String hash = sha256Bytes(audio);
+                for (Track existing : crate) {
+                    if (hash.equals(existing.contentHash)) {
+                        runUi(() -> {
+                            uploading = false;
+                            pendingUploadId = "";
+                            finishUploadUi("Lagu yang sama sudah ada di The Crate.");
+                        });
+                        return;
+                    }
+                }
+                long duration = 0;
+                android.media.MediaMetadataRetriever metadata = new android.media.MediaMetadataRetriever();
+                try {
+                    metadata.setDataSource(getApplicationContext(), audioUri);
+                    String value = metadata.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION);
+                    if (value != null) duration = Long.parseLong(value);
+                } finally {
+                    metadata.release();
+                }
+                byte[] cover = null;
                 if (coverUri != null) {
-                    setUploadStatus("Membaca cover…", 20);
-                    cover = readBytes(coverUri, 4);
+                    setUploadStatus("Memproses cover…", -1);
+                    cover = compressImage(readBytes(coverUri, 5));
                 }
-
-                String audioPath = null;
-                String coverPath = null;
-
+                if (uploadCancelled) { finishCancelledUpload(); return; }
+                Track t = new Track();
+                t.id = id; t.title = title; t.artist = artist;
+                t.labelColor = label; t.vinylColor = vinyl;
+                t.durationMs = duration; t.contentHash = hash;
                 if (guestMode) {
-                    // Guest mode: keep the picked content URIs, no cloud round-trip.
-                    Track t = new Track();
-                    t.id = id;
-                    t.title = title;
-                    t.artist = artist;
-                    t.audioUrl = localAudioUri;
-                    t.coverUrl = localCoverUri;
-                    t.labelColor = label;
-                    t.vinylColor = vinyl;
+                    t.audioUrl = audioUri.toString();
+                    t.coverUrl = coverUri == null ? "" : coverUri.toString();
                     t.local = true;
-                    pendingUploadId = "";
-                    runUi(() -> {
-                        crate.add(0, t);
-                        saveCrateCache();
-                        syncQueue();
-                        uploading = false;
-                        finishUploadUi("Ditambahkan ke crate lokal");
-                        renderDashboard();
-                        closeDialogs();
-                    });
+                    runUi(() -> { addUploadedTrack(t); finishUploadUi("Ditambahkan ke crate lokal"); });
                     return;
                 }
-
-                if (audioUri != null) {
-                    audioPath = userId + "/" + id + ".mp3";
-                    setUploadStatus("Upload audio ke Supabase…", 45);
-                    storageUpload(audioPath, audio, audioUri != null ? mimeOf(audioUri, "audio/mpeg") : "audio/mpeg");
-                }
-                if (coverUri != null) {
+                if (!online()) throw new ApiException(0, "network", "Offline");
+                final byte[] coverBytes = cover;
+                audioPath = userId + "/" + id + ".mp3";
+                setUploadStatus("Mengunggah audio ke Supabase…", -1);
+                storageUpload(audioPath, audio, "audio/mpeg");
+                if (uploadCancelled) { cleanupCancelledUpload(audioPath, ""); return; }
+                if (coverBytes != null) {
                     coverPath = userId + "/" + id + "_cover.jpg";
-                    setUploadStatus("Upload cover…", 75);
-                    storageUpload(coverPath, compressImage(cover), "image/jpeg");
+                    setUploadStatus("Mengunggah cover…", -1);
+                    storageUpload(coverPath, coverBytes, "image/jpeg");
                 }
-
-                setUploadStatus("Menyimpan metadata…", 92);
+                if (uploadCancelled) { cleanupCancelledUpload(audioPath, coverPath); return; }
+                setUploadStatus("Menyimpan metadata…", -1);
                 JSONObject row = new JSONObject();
-                row.put("id", id);
-                row.put("user_id", userId);
-                row.put("title", title);
-                row.put("artist", artist);
-                row.put("label_color", label);
-                row.put("vinyl_color", vinyl);
-                row.put("audio_path", audioPath);
-                row.put("audio_url", "");
-                row.put("cover_path", coverPath);
+                row.put("id", id); row.put("user_id", userId);
+                row.put("title", title); row.put("artist", artist);
+                row.put("label_color", label); row.put("vinyl_color", vinyl);
+                row.put("audio_path", audioPath); row.put("audio_url", JSONObject.NULL);
+                row.put("cover_path", coverPath.isEmpty() ? JSONObject.NULL : coverPath);
+                row.put("duration_ms", duration); row.put("content_hash", hash);
                 row.put("position", crate.size());
-                // Upsert on the primary key so "Try Again" can never create a duplicate row.
-                restUpsert("crate_tracks", row);
-
-                Track t = new Track();
-                t.id = id;
-                t.title = title;
-                t.artist = artist;
-                t.audioPath = audioPath == null ? "" : audioPath;
-                t.coverPath = coverPath == null ? "" : coverPath;
-                t.audioUrl = audioPath == null ? "" : publicStorageUrl(audioPath);
-                t.coverUrl = coverPath == null ? "" : publicStorageUrl(coverPath);
-                t.labelColor = label;
-                t.vinylColor = vinyl;
-
-                pendingUploadId = "";
-                runUi(() -> {
-                    crate.add(0, t);
-                    saveCrateCache();
-                    syncQueue();
-                    uploading = false;
-                    finishUploadUi("Lagu tersimpan di The Crate");
-                    renderDashboard();
-                    closeDialogs();
-                });
+                JSONArray saved = restUpsert("crate_tracks", row);
+                if (saved.length() == 0 || !id.equals(saved.getJSONObject(0).optString("id"))) {
+                    throw new ApiException(0, "server", "Konfirmasi penyimpanan tidak lengkap.");
+                }
+                t.audioPath = audioPath; t.coverPath = coverPath;
+                t.audioUrl = publicStorageUrl(audioPath);
+                t.coverUrl = coverPath.isEmpty() ? "" : publicStorageUrl(coverPath);
+                runUi(() -> { addUploadedTrack(t); finishUploadUi("Lagu tersimpan di The Crate"); });
             } catch (Exception e) {
-                // Never claim success for a failed upload.
+                if (uploadCancelled) { cleanupCancelledUpload(audioPath, coverPath); return; }
                 runUi(() -> {
                     uploading = false;
-                    if (uploadBar != null) uploadBar.setVisibility(View.GONE);
+                    if (uploadBar != null) { uploadBar.setVisibility(View.GONE); uploadBar.setIndeterminate(false); }
                     if (uploadLabel != null) uploadLabel.setText("Upload gagal — belum masuk ke The Crate.");
                     showOperationError(e, "Upload gagal", () -> commitAddMusic(fields, audioUri, coverUri));
                 });
@@ -1699,12 +1857,58 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    void addUploadedTrack(Track t) {
+        boolean replaced = false;
+        for (int i = 0; i < crate.size(); i++) {
+            if (crate.get(i).id.equals(t.id)) { crate.set(i, t); replaced = true; break; }
+        }
+        if (!replaced) crate.add(0, t);
+        saveCrateCache();
+        syncQueue();
+        uploading = false;
+        pendingUploadId = "";
+        pendingAudioUri = null;
+        pendingCoverUri = null;
+        draftTitle = "";
+        draftArtist = "";
+        renderDashboard();
+        closeDialogs();
+    }
+
+    void cleanupCancelledUpload(String audioPath, String coverPath) {
+        try { if (!audioPath.isEmpty()) storageDelete(audioPath); } catch (Exception ignored) { }
+        try { if (!coverPath.isEmpty()) storageDelete(coverPath); } catch (Exception ignored) { }
+        finishCancelledUpload();
+    }
+
+    void finishCancelledUpload() {
+        runUi(() -> {
+            uploading = false;
+            if (uploadBar != null) { uploadBar.setVisibility(View.GONE); uploadBar.setIndeterminate(false); }
+            if (uploadLabel != null) uploadLabel.setText("Upload dibatalkan. File tidak ditambahkan ke crate.");
+        });
+    }
+
+    static String sha256Bytes(byte[] data) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(data);
+            StringBuilder out = new StringBuilder();
+            for (byte b : digest) out.append(String.format(Locale.US, "%02x", b));
+            return out.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+
     void setUploadStatus(String label, int pct) {
         runUi(() -> {
             if (uploadLabel != null) uploadLabel.setText(label);
             if (uploadBar != null) {
                 uploadBar.setVisibility(View.VISIBLE);
-                uploadBar.setProgress(pct);
+                // Network APIs here do not expose byte progress: do not invent a percentage.
+                uploadBar.setIndeterminate(pct < 0);
+                if (pct >= 0) uploadBar.setProgress(pct);
             }
         });
     }
@@ -1787,6 +1991,15 @@ public class MainActivity extends AppCompatActivity {
         android.media.audiofx.Equalizer equalizer;
         int eqSessionId = -1;
         boolean eqWanted = false;
+        final Handler historyHandler = new Handler(Looper.getMainLooper());
+        String listenTrackId = "", listenEventId = "", listenTitle = "", listenArtist = "";
+        long listenStarted = 0L, listenAccumulated = 0L, listenPlayedAt = 0L;
+        final Runnable historyCheckpoint = new Runnable() {
+            @Override public void run() {
+                checkpointListening();
+                historyHandler.postDelayed(this, 15000L);
+            }
+        };
 
         @Override
         public void onCreate() {
@@ -1834,9 +2047,86 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void onPlaybackStateChanged(int playbackState) {
                     if (playbackState == Player.STATE_READY) applyEqualizer();
+                    if (playbackState == Player.STATE_ENDED) checkpointListening();
+                }
+
+                @Override
+                public void onMediaItemTransition(@Nullable MediaItem item, int reason) {
+                    checkpointListening();
+                    beginListening(item);
+                }
+
+                @Override
+                public void onIsPlayingChanged(boolean isPlaying) {
+                    if (isPlaying) {
+                        if (listenTrackId.isEmpty()) beginListening(exo.getCurrentMediaItem());
+                        if (listenStarted == 0L) listenStarted = SystemClock.elapsedRealtime();
+                    } else {
+                        checkpointListening();
+                    }
                 }
             });
+            historyHandler.postDelayed(historyCheckpoint, 15000L);
             applyEqualizer();
+        }
+
+        void beginListening(@Nullable MediaItem item) {
+            if (item == null || item.mediaId.isEmpty()) return;
+            if (item.mediaId.equals(listenTrackId)) return;
+            listenTrackId = item.mediaId;
+            listenEventId = java.util.UUID.randomUUID().toString();
+            listenTitle = String.valueOf(item.mediaMetadata.title == null ? "Untitled" : item.mediaMetadata.title);
+            listenArtist = String.valueOf(item.mediaMetadata.artist == null ? "Unknown Artist" : item.mediaMetadata.artist);
+            listenPlayedAt = System.currentTimeMillis();
+            listenAccumulated = 0L;
+            listenStarted = exo.isPlaying() ? SystemClock.elapsedRealtime() : 0L;
+        }
+
+        /** Counts only isPlaying time, not buffering/pauses, and survives Activity loss. */
+        void checkpointListening() {
+            long now = SystemClock.elapsedRealtime();
+            if (listenStarted > 0L) {
+                listenAccumulated += Math.max(0L, now - listenStarted);
+                listenStarted = 0L;
+            }
+            if (listenEventId.isEmpty() || listenAccumulated < 1000L) return;
+            SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+            String uid = sp.getString("user_id", "");
+            String hKey = uid.isEmpty() ? "history_guest" : "history_" + uid;
+            try {
+                JSONObject h = new JSONObject();
+                h.put("id", listenEventId);
+                h.put("trackId", listenTrackId);
+                h.put("title", listenTitle);
+                h.put("artist", listenArtist);
+                h.put("playedAt", listenPlayedAt);
+                h.put("durationMs", listenAccumulated);
+                synchronized (HISTORY_DISK_LOCK) {
+                    JSONArray history = new JSONArray(sp.getString(hKey, "[]"));
+                    JSONArray updated = new JSONArray();
+                    updated.put(h);
+                    for (int i = 0; i < history.length() && i < 499; i++) {
+                        JSONObject old = history.getJSONObject(i);
+                        if (!listenEventId.equals(old.optString("id"))) updated.put(old);
+                    }
+                    SharedPreferences.Editor edit = sp.edit().putString(hKey, updated.toString());
+                    if (!uid.isEmpty()) {
+                        h.put("userId", uid);
+                        JSONArray queue = new JSONArray(sp.getString("history_outbox_" + uid, "[]"));
+                        JSONArray next = new JSONArray();
+                        next.put(h);
+                        for (int i = 0; i < queue.length() && i < 499; i++) {
+                            JSONObject old = queue.getJSONObject(i);
+                            if (!listenEventId.equals(old.optString("id"))) next.put(old);
+                        }
+                        edit.putString("history_outbox_" + uid, next.toString());
+                    }
+                    edit.apply();
+                }
+            } catch (JSONException e) {
+                android.util.Log.w(TAG, "Could not encode listening checkpoint");
+            }
+            if (exo.isPlaying()) listenStarted = now;
         }
 
         /**
@@ -1935,6 +2225,8 @@ public class MainActivity extends AppCompatActivity {
                         .unregisterOnSharedPreferenceChangeListener(dspListener);
                 dspListener = null;
             }
+            historyHandler.removeCallbacks(historyCheckpoint);
+            checkpointListening();
             releaseEqualizer();
             if (session != null) {
                 session.release();
@@ -1988,16 +2280,8 @@ public class MainActivity extends AppCompatActivity {
                 ui.post(() -> {
                     if (vinyl != null) vinyl.setPlaying(isPlaying);
                     updatePlayIcons(isPlaying);
-                    if (isPlaying) {
-                        if (playStartedAt == 0) playStartedAt = SystemClock.elapsedRealtime();
-                        Track t = currentTrack();
-                        if (t != null) {
-                            recordListen(t);
-                            pushPlayEvent(t);
-                        }
-                    } else {
-                        flushListenSession();
-                    }
+                    // Listening time is checkpointed by the service, independently
+                    // of whether this Activity is visible or alive.
                 });
             }
 
@@ -2005,7 +2289,6 @@ public class MainActivity extends AppCompatActivity {
             public void onPlaybackStateChanged(int state) {
                 ui.post(() -> {
                     updateMiniBar();
-                    if (state == Player.STATE_ENDED) flushListenSession();
                     // Media3 itself owns next/repeat/shuffle transitions. Advancing here
                     // again would skip a track or break repeat-one.
                 });
@@ -2160,53 +2443,48 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    void onTrackEnded() {
-        if (controller == null) return;
-        if (repeatMode == Player.REPEAT_MODE_ONE) {
-            controller.seekTo(0);
-            controller.play();
-        } else if (controller.hasNextMediaItem()) {
-            controller.seekToNextMediaItem();
-            controller.play();
-        } else if (repeatMode == Player.REPEAT_MODE_ALL && controller.getMediaItemCount() > 0) {
-            controller.seekTo(0, 0);
-            controller.play();
-        } else {
-            flushListenSession();
+    /** Upload queued service checkpoints with stable IDs; safe after offline playback. */
+    void flushHistoryOutboxBlocking() {
+        if (guestMode || userId.isEmpty()) return;
+        synchronized (outboxLock) {
+            if (outboxSyncing) return;
+            outboxSyncing = true;
         }
-    }
-
-    /* ---- listening history (feeds the report) ---- */
-
-    void recordListen(Track t) {
-        // Collapse repeated isPlaying=true events for the same track into one history entry.
-        if (!history.isEmpty() && history.get(0).trackId.equals(t.id)
-                && System.currentTimeMillis() - history.get(0).playedAt < 30000L) {
-            return;
-        }
-        Hist h = new Hist();
-        h.trackId = t.id;
-        h.title = t.title;
-        h.artist = t.artist;
-        h.playedAt = System.currentTimeMillis();
-        h.durationMs = 0;
-        history.add(0, h);
-        while (history.size() > 500) history.remove(history.size() - 1);
-        saveLocalHistory();
-    }
-
-    void flushListenSession() {
-        if (playStartedAt <= 0) return;
-        long played = SystemClock.elapsedRealtime() - playStartedAt;
-        playStartedAt = 0;
-        if (played < 5000) return;
-        for (Hist h : history) {
-            if (h.durationMs == 0 && h.trackId.equals(currentTrackId)) {
-                h.durationMs = played;
-                break;
+        try {
+            JSONArray queue;
+            synchronized (HISTORY_DISK_LOCK) {
+                queue = new JSONArray(prefs.getString(outboxKey(), "[]"));
             }
+            for (int i = 0; i < queue.length(); i++) {
+                JSONObject h = queue.getJSONObject(i);
+                if (!userId.equals(h.optString("userId"))) continue;
+                JSONObject row = new JSONObject();
+                row.put("id", h.optString("id"));
+                row.put("user_id", userId);
+                row.put("track_id", h.optString("trackId"));
+                row.put("title", h.optString("title"));
+                row.put("artist", h.optString("artist"));
+                row.put("duration_ms", h.optLong("durationMs"));
+                row.put("created_at", new java.util.Date(h.optLong("playedAt")).toInstant().toString());
+                restUpsert("play_events", row);
+                synchronized (HISTORY_DISK_LOCK) {
+                    JSONArray latest = new JSONArray(prefs.getString(outboxKey(), "[]"));
+                    JSONArray remaining = new JSONArray();
+                    for (int j = 0; j < latest.length(); j++) {
+                        JSONObject item = latest.getJSONObject(j);
+                        // Preserve a newer duration checkpoint written while uploading.
+                        if (item.optString("id").equals(h.optString("id"))
+                                && item.optLong("durationMs") <= h.optLong("durationMs")) continue;
+                        remaining.put(item);
+                    }
+                    prefs.edit().putString(outboxKey(), remaining.toString()).apply();
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w(TAG, "Listening outbox retained for next sync: " + e.getClass().getSimpleName());
+        } finally {
+            synchronized (outboxLock) { outboxSyncing = false; }
         }
-        saveLocalHistory();
     }
 
     /* =====================================================================
@@ -2267,6 +2545,7 @@ public class MainActivity extends AppCompatActivity {
 
         body.addView(nowPlayingCard());
         body.addView(quickActions());
+        body.addView(recentlyPlayedCard());
         body.addView(crateCard());
         body.addView(top5Card());
 
@@ -2419,7 +2698,7 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout wrap = column();
         LinearLayout r1 = row();
         TextView crateBtn = outlineButton("🗂  The Crate", v -> {
-            if (mainScroll != null) mainScroll.smoothScrollTo(0, dp(430));
+            if (mainScroll != null && crateSection != null) mainScroll.smoothScrollTo(0, crateSection.getTop());
         });
         TextView posterBtn = outlineButton("🎨  Poster", v -> showPosterDialog());
         crateBtn.setLayoutParams(lp(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -2441,6 +2720,9 @@ public class MainActivity extends AppCompatActivity {
         r2.addView(spacerH(8));
         r2.addView(lyricsBtn);
         wrap.addView(r2);
+        wrap.addView(buttonRow(
+                outlineButton("Next Queue", v -> showQueueDialog()),
+                outlineButton("Profile", v -> showProfileDialog())));
 
         TextView addBtn = primaryButton("+  Add Music", v -> showAddMusicDialog());
         LinearLayout.LayoutParams alp = matchWrap();
@@ -2451,8 +2733,68 @@ public class MainActivity extends AppCompatActivity {
         return wrap;
     }
 
+    View recentlyPlayedCard() {
+        LinearLayout c = card(C_PAPER);
+        c.addView(text("Recently Played", 22f, C_INK, true));
+        Set<String> seen = new HashSet<>();
+        int count = 0;
+        for (Hist h : history) {
+            Track t = findTrack(h.trackId);
+            if (t == null || !seen.add(t.id)) continue;
+            c.addView(trackRow(t, true));
+            if (++count >= 3) break;
+        }
+        if (count == 0) c.addView(text("Riwayat putar asli akan muncul di sini setelah kamu mendengarkan lagu.", 13f, C_MUTED, false));
+        return c;
+    }
+
+    void showQueueDialog() {
+        if (controller == null || controller.getMediaItemCount() == 0) {
+            info("Next Queue", "Antrean masih kosong. Putar lagu dari The Crate dulu.", "Mengerti", null);
+            return;
+        }
+        Dialog d = new Dialog(this, R.style.ChirootDialog);
+        LinearLayout c = column();
+        c.setBackground(bg(C_PAPER, 24f, C_INK, 1.5f));
+        c.setPadding(dp(18), dp(18), dp(18), dp(18));
+        c.addView(text("Next Queue", 24f, C_INK, true));
+        int current = controller.getCurrentMediaItemIndex();
+        for (int i = Math.max(0, current); i < controller.getMediaItemCount(); i++) {
+            final int index = i;
+            MediaItem item = controller.getMediaItem(i);
+            Track t = findTrack(item.mediaId);
+            LinearLayout r = row();
+            LinearLayout labels = column();
+            labels.addView(text((i == current ? "▶ " : "") + (t == null ? String.valueOf(item.mediaMetadata.title) : t.title), 15f, C_INK, true));
+            labels.addView(text(t == null ? String.valueOf(item.mediaMetadata.artist) : t.artist, 12f, C_MUTED, false));
+            r.addView(labels, lp(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            r.addView(chip("Play", C_PAPER_2, C_INK, v -> {
+                controller.seekTo(index, 0);
+                controller.play();
+                d.dismiss();
+            }));
+            if (i != current) {
+                r.addView(spacerH(6));
+                r.addView(chip("Hapus", C_PAPER_2, C_RED, v -> {
+                    controller.removeMediaItem(index);
+                    d.dismiss();
+                    showQueueDialog();
+                }));
+            }
+            r.setPadding(0, dp(8), 0, dp(8));
+            c.addView(r);
+        }
+        c.addView(text("Menghapus dari antrean tidak menghapus lagu dari The Crate.", 12f, C_MUTED, false));
+        c.addView(subtleButton("Close", v -> d.dismiss()), matchWrap());
+        ScrollView sv = new ResponsiveScrollView(this);
+        sv.addView(c);
+        d.setContentView(sv);
+        showDialog(d);
+    }
+
     View crateCard() {
         LinearLayout c = card(C_PAPER);
+        crateSection = c;
         LinearLayout head = row();
         TextView title = text("The Crate", 20f, C_INK, true);
         crateCount = text("0 lagu", 12f, C_MUTED, false);
@@ -2484,6 +2826,20 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         c.addView(crateSearch);
+        Spinner sort = new Spinner(this);
+        ArrayAdapter<String> options = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+                new String[]{"Urutan crate", "Judul A–Z", "Artis A–Z"});
+        options.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sort.setAdapter(options);
+        sort.setSelection(crateSort);
+        sort.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                crateSort = position;
+                renderCrateList();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        });
+        c.addView(sort, matchWrap());
 
         crateEmpty = text("Crate masih kosong. Tambahkan lagu pertamamu 🎵", 13f, C_MUTED, false);
         crateEmpty.setPadding(0, dp(16), 0, dp(6));
@@ -2522,7 +2878,10 @@ public class MainActivity extends AppCompatActivity {
         crateList.removeAllViews();
         String q = crateSearch == null ? "" : crateSearch.getText().toString().trim().toLowerCase(Locale.ROOT);
         int shown = 0;
-        for (Track t : crate) {
+        List<Track> sorted = new ArrayList<>(crate);
+        if (crateSort == 1) sorted.sort((a, b) -> a.title.compareToIgnoreCase(b.title));
+        if (crateSort == 2) sorted.sort((a, b) -> a.artist.compareToIgnoreCase(b.artist));
+        for (Track t : sorted) {
             if (!q.isEmpty() && !t.title.toLowerCase(Locale.ROOT).contains(q)
                     && !t.artist.toLowerCase(Locale.ROOT).contains(q)) continue;
             crateList.addView(trackRow(t, false));
@@ -2599,6 +2958,26 @@ public class MainActivity extends AppCompatActivity {
             playTrack(t);
         });
         c.addView(playNow, matchWrap());
+        boolean favorite = favoriteIds.contains(t.id);
+        c.addView(subtleButton(favorite ? "Hapus dari favorit" : "Tambah ke favorit", v -> {
+            d.dismiss();
+            setFavorite(t, !favorite);
+        }), matchWrap());
+        c.addView(subtleButton("Putar berikutnya", v -> {
+            d.dismiss();
+            if (controller == null) return;
+            int from = -1;
+            for (int i = 0; i < controller.getMediaItemCount(); i++) {
+                if (t.id.equals(controller.getMediaItem(i).mediaId)) { from = i; break; }
+            }
+            int current = controller.getCurrentMediaItemIndex();
+            if (from >= 0 && from != current && controller.getMediaItemCount() > 1) {
+                controller.moveMediaItem(from, from > current ? current + 1 : current);
+                toast("Lagu dipindahkan ke urutan berikutnya.");
+            } else {
+                toast("Lagu sudah berada di posisi saat ini.");
+            }
+        }), matchWrap());
         TextView remove = subtleButton("Remove from crate", v -> {
             d.dismiss();
             confirm("Hapus lagu?", "Hapus \"" + t.title + "\" dari crate?"
@@ -2664,6 +3043,14 @@ public class MainActivity extends AppCompatActivity {
     @Nullable
     Bitmap fetchBitmap(String urlStr) {
         if (TextUtils.isEmpty(urlStr)) return null;
+        if (urlStr.startsWith("data:image/")) {
+            int comma = urlStr.indexOf(',');
+            if (comma < 0) return null;
+            try {
+                byte[] data = Base64.decode(urlStr.substring(comma + 1), Base64.DEFAULT);
+                return BitmapFactory.decodeByteArray(data, 0, data.length);
+            } catch (IllegalArgumentException e) { return null; }
+        }
         if (urlStr.startsWith("content:") || urlStr.startsWith("file:")) {
             try (InputStream in = getContentResolver().openInputStream(Uri.parse(urlStr))) {
                 return BitmapFactory.decodeStream(in);
@@ -2916,6 +3303,14 @@ public class MainActivity extends AppCompatActivity {
         if (shown == 0) {
             c.addView(text("Belum ada riwayat putar.", 13f, C_MUTED, false));
         }
+        c.addView(sectionTitle("FAVORIT"));
+        int favoritesShown = 0;
+        for (String id : favoriteIds) {
+            Track t = findTrack(id);
+            c.addView(text("♥ " + (t == null ? titleFromHistory(id) : t.title), 14f, C_INK, false));
+            favoritesShown++;
+        }
+        if (favoritesShown == 0) c.addView(text("Belum ada lagu favorit.", 13f, C_MUTED, false));
 
         ScrollView sv = new ResponsiveScrollView(this);
         sv.addView(c);
@@ -3247,6 +3642,8 @@ public class MainActivity extends AppCompatActivity {
                 default: message = "Data belum bisa disimpan. Periksa input dan konfigurasi backend."; break;
             }
             toast(operation + ". " + message);
+        } else if (error instanceof IllegalArgumentException) {
+            toast(operation + ". " + error.getMessage());
         } else {
             // Local file/JSON errors are not evidence that the internet is down.
             toast(operation + ". Periksa file dan data yang dipilih.");
@@ -3293,10 +3690,23 @@ public class MainActivity extends AppCompatActivity {
         c.addView(pickAudioBtn);
 
         c.addView(label("JUDUL"));
-        EditText titleIn = styledInput("Judul lagu", "", InputType.TYPE_CLASS_TEXT);
+        if (draftTitle.isEmpty() && pendingAudioUri != null) {
+            draftTitle = queryDisplayName(pendingAudioUri).replaceAll("(?i)\\.mp3$", "");
+        }
+        EditText titleIn = styledInput("Judul lagu", draftTitle, InputType.TYPE_CLASS_TEXT);
+        titleIn.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { draftTitle = s.toString(); }
+            @Override public void afterTextChanged(android.text.Editable s) { }
+        });
         c.addView(titleIn);
         c.addView(label("ARTIS"));
-        EditText artistIn = styledInput("Nama artis", "", InputType.TYPE_CLASS_TEXT);
+        EditText artistIn = styledInput("Nama artis", draftArtist, InputType.TYPE_CLASS_TEXT);
+        artistIn.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { draftArtist = s.toString(); }
+            @Override public void afterTextChanged(android.text.Editable s) { }
+        });
         c.addView(artistIn);
 
         TextView autofill = subtleButton("✨ Quick Auto-fill dari nama file", v -> {
@@ -3372,10 +3782,23 @@ public class MainActivity extends AppCompatActivity {
         submit.setLayoutParams(slp);
         c.addView(submit);
 
+        c.addView(subtleButton("Cancel upload", v -> {
+            if (uploading) {
+                uploadCancelled = true;
+                uploadLabel.setText("Membatalkan…");
+            } else {
+                toast("Tidak ada upload yang sedang berjalan.");
+            }
+        }), matchWrap());
         TextView close = subtleButton("Close", v -> {
             d.dismiss();
-            pendingAudioUri = null;
-            pendingCoverUri = null;
+            if (!uploading) {
+                pendingAudioUri = null;
+                pendingCoverUri = null;
+                pendingUploadId = "";
+                draftTitle = "";
+                draftArtist = "";
+            }
         });
         LinearLayout.LayoutParams closeLp = matchWrap();
         closeLp.topMargin = dp(8);
@@ -3418,7 +3841,6 @@ public class MainActivity extends AppCompatActivity {
             v.setOnClickListener(x -> {
                 if (isLabel) draftLabel = hex;
                 else draftVinyl = hex;
-                if (vinyl != null) vinyl.setColors(draftVinyl, draftLabel);
                 toast("Warna dipilih: " + hex);
             });
             r.addView(v);
@@ -3524,7 +3946,7 @@ public class MainActivity extends AppCompatActivity {
         return bmp;
     }
 
-    String posterSvg(@Nullable Track t, boolean withCover) {
+    String posterSvg(@Nullable Track t, boolean withCover, @Nullable Bitmap coverBitmap) {
         String title = escapeXml(t == null ? "No record loaded" : t.title);
         String artist = escapeXml(t == null ? "chiroot.my.id" : t.artist);
         String vinyl = t == null ? DEFAULT_VINYL : safeColor(t.vinylColor, DEFAULT_VINYL);
@@ -3536,8 +3958,11 @@ public class MainActivity extends AppCompatActivity {
                     300 * (0.40 + i * 0.055)));
         }
         String cover = "";
-        if (withCover && t != null && !TextUtils.isEmpty(t.coverUrl)) {
-            cover = "  <image href=\"" + escapeXml(t.coverUrl) + "\" x=\"440\" y=\"460\" width=\"200\" height=\"200\" "
+        if (withCover && coverBitmap != null) {
+            ByteArrayOutputStream image = new ByteArrayOutputStream();
+            coverBitmap.compress(Bitmap.CompressFormat.PNG, 100, image);
+            String data = "data:image/png;base64," + Base64.encodeToString(image.toByteArray(), Base64.NO_WRAP);
+            cover = "  <image href=\"" + data + "\" x=\"441\" y=\"461\" width=\"198\" height=\"198\" "
                     + "clip-path=\"url(#labelClip)\" preserveAspectRatio=\"xMidYMid slice\"/>\n";
         } else {
             cover = "  <text x=\"540\" y=\"572\" text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"40\" "
@@ -3547,7 +3972,7 @@ public class MainActivity extends AppCompatActivity {
                 + "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
                 + "width=\"1080\" height=\"1350\" viewBox=\"0 0 1080 1350\">\n"
                 + "  <defs>\n"
-                + "    <clipPath id=\"labelClip\"><circle cx=\"540\" cy=\"560\" r=\"66\"/></clipPath>\n"
+                + "    <clipPath id=\"labelClip\"><circle cx=\"540\" cy=\"560\" r=\"99\"/></clipPath>\n"
                 + "    <radialGradient id=\"sheen\" cx=\"35%\" cy=\"30%\" r=\"80%\">\n"
                 + "      <stop offset=\"0%\" stop-color=\"#ffffff\" stop-opacity=\"0.14\"/>\n"
                 + "      <stop offset=\"100%\" stop-color=\"#000000\" stop-opacity=\"0.25\"/>\n"
@@ -3614,16 +4039,7 @@ public class MainActivity extends AppCompatActivity {
             toast(withCover[0] ? "Poster dengan cover" : "Poster tanpa cover");
         });
         TextView svg = outlineButton("Download SVG", v -> {
-            pendingSvgForSave = posterSvg(currentTrack(), withCover[0]);
-            Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-            i.addCategory(Intent.CATEGORY_OPENABLE);
-            i.setType("image/svg+xml");
-            i.putExtra(Intent.EXTRA_TITLE, "chiroot-poster.svg");
-            try {
-                startActivityForResult(i, REQ_SAVE_SVG);
-            } catch (ActivityNotFoundException e) {
-                toast("Tidak ada penyimpan file.");
-            }
+            exportSvg(currentTrack(), withCover[0]);
         });
         regen.setLayoutParams(lp(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         svg.setLayoutParams(lp(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -3640,15 +4056,21 @@ public class MainActivity extends AppCompatActivity {
                 runUi(() -> shareBitmap(b));
             });
         });
-        TextView copy = subtleButton("Copy", v -> {
-            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm != null) {
-                cm.setPrimaryClip(ClipData.newPlainText("Chiroot",
-                        "Now spinning: " + (currentTrack() == null ? "Chiroot" : currentTrack().title
-                                + " — " + currentTrack().artist) + "\n#Chiroot"));
-                toast("Teks poster dicopy.");
+        TextView copy = subtleButton("Copy", v -> runIo(() -> {
+            Bitmap poster = renderPoster(currentTrack(), withCover[0]);
+            try {
+                Uri uri = posterCacheUri(poster);
+                runUi(() -> {
+                    ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm != null) {
+                        cm.setPrimaryClip(ClipData.newUri(getContentResolver(), "Chiroot poster", uri));
+                        toast("Poster disalin sebagai gambar; dukungan tergantung aplikasi tujuan.");
+                    }
+                });
+            } catch (IOException e) {
+                runUi(() -> toast("Poster tidak bisa disalin."));
             }
-        });
+        }));
         share.setLayoutParams(lp(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         copy.setLayoutParams(lp(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         LinearLayout.LayoutParams r2lp = matchWrap();
@@ -3671,15 +4093,55 @@ public class MainActivity extends AppCompatActivity {
         showDialog(d);
     }
 
+    @Nullable Bitmap coverForPoster(@Nullable Track t) {
+        if (t == null || TextUtils.isEmpty(t.coverUrl)) return null;
+        synchronized (bmpCache) {
+            Bitmap cached = bmpCache.get(t.coverUrl);
+            if (cached != null) return cached;
+        }
+        Bitmap cover = fetchBitmap(t.coverUrl);
+        if (cover != null) {
+            synchronized (bmpCache) { bmpCache.put(t.coverUrl, cover); }
+        }
+        return cover;
+    }
+
+    void exportSvg(@Nullable Track t, boolean withCover) {
+        runIo(() -> {
+            try {
+                Bitmap cover = withCover ? coverForPoster(t) : null;
+                if (withCover && t != null && !t.coverUrl.isEmpty() && cover == null) {
+                    throw new ApiException(0, "network", "Cover belum bisa diunduh.");
+                }
+                String svg = posterSvg(t, withCover, cover);
+                runUi(() -> {
+                    pendingSvgForSave = svg;
+                    Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    i.addCategory(Intent.CATEGORY_OPENABLE);
+                    i.setType("image/svg+xml");
+                    i.putExtra(Intent.EXTRA_TITLE, "chiroot-poster.svg");
+                    try { startActivityForResult(i, REQ_SAVE_SVG); }
+                    catch (ActivityNotFoundException e) { toast("Tidak ada penyimpan file."); }
+                });
+            } catch (Exception e) {
+                runUi(() -> showOperationError(e, "SVG belum dibuat", () -> exportSvg(t, withCover)));
+            }
+        });
+    }
+
+    Uri posterCacheUri(Bitmap bmp) throws IOException {
+        File dir = new File(getCacheDir(), "posters");
+        if (!dir.exists() && !dir.mkdirs()) throw new IOException("cache");
+        File f = new File(dir, "chiroot-poster-" + System.currentTimeMillis() + ".png");
+        try (FileOutputStream out = new FileOutputStream(f)) {
+            if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new IOException("encode poster");
+        }
+        return FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", f);
+    }
+
     void shareBitmap(Bitmap bmp) {
         try {
-            File dir = new File(getCacheDir(), "posters");
-            if (!dir.exists() && !dir.mkdirs()) throw new IOException("cache");
-            File f = new File(dir, "chiroot-poster-" + System.currentTimeMillis() + ".png");
-            try (FileOutputStream out = new FileOutputStream(f)) {
-                bmp.compress(Bitmap.CompressFormat.PNG, 100, out);
-            }
-            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", f);
+            Uri uri = posterCacheUri(bmp);
             Intent i = new Intent(Intent.ACTION_SEND);
             i.setType("image/png");
             i.putExtra(Intent.EXTRA_STREAM, uri);
@@ -3749,7 +4211,7 @@ public class MainActivity extends AppCompatActivity {
                 String url = "https://lrclib.net/api/search?track_name=" + enc(t.title)
                         + "&artist_name=" + enc(t.artist);
                 Resp r = http("GET", url, null, null, null, null);
-                if (r.status >= 400) throw new ApiException(r.status, "server", "lrclib");
+                if (r.status >= 400) throw classify(r.status, r.body);
                 JSONArray arr = new JSONArray(r.body);
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject o = arr.optJSONObject(i);
@@ -3762,8 +4224,16 @@ public class MainActivity extends AppCompatActivity {
                 }
             } catch (Exception e) {
                 final String msg = describe(e);
-                runUi(() -> body.setText("Lirik tidak bisa dimuat.\n" + msg
-                        + "\n\nCoba lagi nanti — Chiroot tidak pernah menampilkan lirik karangan."));
+                runUi(() -> {
+                    body.setText("Lirik tidak bisa dimuat.\n" + msg
+                            + "\n\nCoba lagi nanti — Chiroot tidak pernah menampilkan lirik karangan.");
+                    if (e instanceof ApiException && ((ApiException) e).isConnectionProblem()) {
+                        showConnectionError("Lirik belum bisa diunduh. " + msg, () -> {
+                            body.setText("Memuat lirik…");
+                            fetchLyrics(t, body);
+                        });
+                    }
+                });
                 return;
             }
             final String result = lyric;
@@ -3789,7 +4259,12 @@ public class MainActivity extends AppCompatActivity {
         c.setBackground(bg(C_PAPER, 24f, 0xFFE3D8C4, 1f));
         c.setPadding(dp(20), dp(20), dp(20), dp(18));
 
-        c.addView(text("Profile", 22f, C_INK, true));
+        c.addView(text("Profile", 24f, C_INK, true));
+        if (!profileDraftActive) {
+            profileDraftName = userName;
+            profileDraftBio = profileBio;
+            profileDraftActive = true;
+        }
 
         FrameLayout banner = new FrameLayout(this);
         banner.setBackground(bg(Color.parseColor(profileBanner), 18f, C_INK, 1.5f));
@@ -3805,8 +4280,9 @@ public class MainActivity extends AppCompatActivity {
         alp.leftMargin = dp(12);
         alp.bottomMargin = -dp(24);
         banner.addView(avatar, alp);
-        if (!TextUtils.isEmpty(userAvatar)) {
-            final String u = userAvatar;
+        String avatarValue = pendingAvatarDataUrl.isEmpty() ? userAvatar : pendingAvatarDataUrl;
+        if (!TextUtils.isEmpty(avatarValue)) {
+            final String u = avatarValue;
             runIo(() -> {
                 Bitmap b = fetchBitmap(u);
                 if (b != null) runUi(() -> avatar.setImageBitmap(b));
@@ -3830,17 +4306,40 @@ public class MainActivity extends AppCompatActivity {
             login.setLayoutParams(llp);
             body.addView(login);
         } else {
-            EditText nameIn = styledInput("Display name", userName, InputType.TYPE_CLASS_TEXT);
-            EditText bioIn = styledInput("Bio / description", profileBio, InputType.TYPE_CLASS_TEXT
+            EditText nameIn = styledInput("Display name", profileDraftName, InputType.TYPE_CLASS_TEXT);
+            nameIn.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) { profileDraftName = s.toString(); }
+                @Override public void afterTextChanged(android.text.Editable s) { }
+            });
+            EditText bioIn = styledInput("Bio / description", profileDraftBio, InputType.TYPE_CLASS_TEXT
                     | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-            EditText avatarIn = styledInput("URL foto profil (opsional)", userAvatar,
-                    InputType.TYPE_TEXT_VARIATION_URI);
+            bioIn.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+                @Override public void onTextChanged(CharSequence s, int a, int b, int c) { profileDraftBio = s.toString(); }
+                @Override public void afterTextChanged(android.text.Editable s) { }
+            });
             c.addView(label("NAMA"));
             c.addView(nameIn);
             c.addView(label("DESKRIPSI"));
             c.addView(bioIn);
             c.addView(label("FOTO PROFIL"));
-            c.addView(avatarIn);
+            c.addView(outlineButton("Pilih foto profil…", v -> pickAvatar()), matchWrap());
+            c.addView(label("WARNA BANNER"));
+            LinearLayout colors = row();
+            for (String hex : LABEL_SWATCHES) {
+                View swatch = new View(this);
+                swatch.setBackground(bg(Color.parseColor(hex), 18f, C_INK, 1f));
+                swatch.setLayoutParams(lp(dp(32), dp(32)));
+                swatch.setContentDescription("Banner " + hex);
+                swatch.setOnClickListener(v -> {
+                    profileBanner = hex;
+                    banner.setBackground(bg(Color.parseColor(hex), 18f, C_INK, 1.5f));
+                });
+                colors.addView(swatch);
+                colors.addView(spacerH(8));
+            }
+            c.addView(colors);
             TextView email = text(userEmail, 12f, C_MUTED, false);
             email.setPadding(0, dp(10), 0, 0);
             c.addView(email);
@@ -3848,7 +4347,7 @@ public class MainActivity extends AppCompatActivity {
             TextView save = primaryButton("Save changes", v -> {
                 final String n = nameIn.getText().toString().trim();
                 final String b = bioIn.getText().toString().trim();
-                final String a = avatarIn.getText().toString().trim();
+                final String a = pendingAvatarDataUrl.isEmpty() ? userAvatar : pendingAvatarDataUrl;
                 saveProfile(n, b, a, d);
             });
             LinearLayout.LayoutParams slp = matchWrap();
@@ -3874,8 +4373,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     void saveProfile(String name, String bio, String avatar, @Nullable Dialog owner) {
-        if (guestMode) {
-            toast("Login dulu untuk menyimpan profil.");
+        if (guestMode) { toast("Login dulu untuk menyimpan profil."); return; }
+        if (name.trim().isEmpty()) { toast("Nama profil wajib diisi."); return; }
+        if (avatar.length() > 400000 || (!avatar.isEmpty() && !avatar.startsWith("https://")
+                && !avatar.startsWith("data:image/"))) {
+            toast("Foto profil tidak valid atau terlalu besar.");
             return;
         }
         if (!online()) {
@@ -3895,6 +4397,8 @@ public class MainActivity extends AppCompatActivity {
                 userName = name;
                 profileBio = bio;
                 userAvatar = avatar;
+                pendingAvatarDataUrl = "";
+                profileDraftActive = false;
                 saveSession();
                 runUi(() -> {
                     if (owner != null && owner.isShowing()) owner.dismiss();
@@ -4272,9 +4776,22 @@ public class MainActivity extends AppCompatActivity {
                         newTracks.size() + " lagu dan " + newHist.size() + " entri riwayat akan digabung "
                                 + "ke data di perangkat ini. Token login tidak pernah ikut di backup.",
                         "Restore", () -> {
-                            crate.addAll(newTracks);
-                            history.addAll(newHist);
+                            LinkedHashMap<String, Track> mergedTracks = new LinkedHashMap<>();
+                            for (Track existing : crate) mergedTracks.put(existing.id, existing);
+                            for (Track imported : newTracks) mergedTracks.put(imported.id, imported);
+                            crate.clear();
+                            crate.addAll(mergedTracks.values());
+                            LinkedHashMap<String, Hist> mergedHistory = new LinkedHashMap<>();
+                            for (Hist existing : history) {
+                                mergedHistory.put(existing.id.isEmpty() ? existing.trackId + "@" + existing.playedAt : existing.id, existing);
+                            }
+                            for (Hist imported : newHist) {
+                                mergedHistory.put(imported.id.isEmpty() ? imported.trackId + "@" + imported.playedAt : imported.id, imported);
+                            }
+                            history.clear();
+                            history.addAll(mergedHistory.values());
                             history.sort((a, b) -> Long.compare(b.playedAt, a.playedAt));
+                            while (history.size() > 500) history.remove(history.size() - 1);
                             saveCrateCache();
                             saveLocalHistory();
                             if (settings != null) {
@@ -4355,6 +4872,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         handleOAuthDeepLink(getIntent());
+        loadLocalHistory();
+        renderTop5();
+        if (!guestMode) runIo(this::flushHistoryOutboxBlocking);
         refreshAppBar();
     }
 }
