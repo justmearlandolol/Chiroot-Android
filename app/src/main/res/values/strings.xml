@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Chiroot</string>
+    <string name="playback_channel_name">Chiroot music</string>
+    <string name="playback_channel_description">Music playback, headphones and lock-screen controls</string>
+</resources>

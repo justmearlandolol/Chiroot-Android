@@ -1,0 +1,551 @@
+CHIROOT NATIVE ANDROID MASTER PROMPT — COMPLETE NATIVE ANDROID MIGRATION
+
+PROJECT OVERVIEW
+
+You are an Android application development agent. Your task is to
+migrate the existing Chiroot web application into a fully functional
+native Android application.
+
+Original website: https://chiroot.my.id/Main.html
+
+Project: - Application: Chiroot - Platform: Native Android - Language:
+Pure Java - Minimum Android: Android 10 (API 29) - Backend: Supabase -
+Authentication: Google OAuth through Supabase - Music storage: Supabase
+Storage - Music engine: Android Media3 / ExoPlayer - Build system:
+Gradle - CI/CD: GitHub Actions - Main application source:
+MainActivity.java
+
+This is a complete native application migration, NOT a WebView wrapper.
+Do not convert the website into an APK using a website-to-APK converter.
+Do not use WebView. Rebuild all application functionality using native
+Android technologies. The application must not depend on the original
+website URL to display its UI or operate.
+
+IMPORTANT FOR A WEBSITE-BASED AI AGENT: You may have limited access to
+local files, terminal commands, Android Studio, Gradle, or GitHub. Do
+not pretend to have executed builds, tests, uploads, or deployments that
+you cannot actually perform. First inspect the capabilities available in
+this environment. If direct project-file creation or compilation is
+unavailable, provide every required file as clearly labeled, complete
+source text and explain exactly where each file belongs. Do not claim
+the APK was built unless an actual build succeeded.
+
+1.  STRICT TECHNOLOGY REQUIREMENTS
+
+Use: - Java only for application source code. - Native Android SDK. -
+AndroidX. - Material Components where appropriate. - Android Media3 /
+ExoPlayer. - Supabase. - Gradle. - GitHub Actions. - Android Canvas for
+native drawing. - Android Storage Access Framework.
+
+Do not use: - Kotlin application source code. - Jetpack Compose. -
+Flutter. - React Native. - WebView. - HTML/CSS/JavaScript application
+interfaces. - Website-to-APK converters. - External website URLs as the
+application UI.
+
+All application interfaces and application logic must be written in
+Java.
+
+SINGLE-JAVA-FILE ARCHITECTURE
+
+The primary application implementation must be contained in
+MainActivity.java.
+
+Implement the following inside MainActivity.java: - Application UI. -
+Navigation. - Authentication screens. - Dashboard. - Music player UI. -
+Music library. - Add Music. - Poster Generator. - Listening Report. -
+Lyrics. - Profile. - Settings. - Audio processing controls. - Supabase
+integration. - Playback controls. - UI state management. - Event
+handling. - Utility methods.
+
+Use programmatic Android Views.
+
+Do not create separate Java Activities, Fragments, Adapters, or helper
+classes.
+
+Supporting Android configuration files are allowed, including
+AndroidManifest.xml, Gradle files, resource XML, GitHub Actions YAML,
+and Supabase SQL migrations.
+
+IMPORTANT: Android background playback may require a MediaSessionService
+implementation. Keep the single-Java-file architecture as the priority,
+but if a dedicated service subclass is required, use a technically valid
+Java implementation and explicitly document the exception rather than
+producing an application that cannot compile. Do not use Kotlin to avoid
+this requirement.
+
+2.  WEBSITE RESEARCH AND VISUAL REPLICATION
+
+Thoroughly inspect: https://chiroot.my.id/Main.html
+
+Analyze: - Original color palette. - Typography. - Layout. -
+Navigation. - Music player. - Vinyl animations. - Poster designs. -
+Buttons and icons. - Spacing. - Interaction patterns. - Existing
+features.
+
+Preserve Chiroot’s original identity: - Retro gramophone aesthetic. -
+Vinyl record-inspired interface. - Vintage music player appearance. -
+Original visual hierarchy. - Smooth animations. - Responsive mobile
+layouts.
+
+Do not redesign Chiroot into a generic Android music player. Adapt the
+existing desktop experience into native Android layouts without simply
+stretching the desktop website onto a phone screen.
+
+If the website cannot be accessed by the agent, state that clearly. Do
+not invent details about the website. Ask for screenshots or source
+files only if they are genuinely required to reproduce unavailable
+design details.
+
+3.  APPLICATION FEATURES
+
+A. AUTHENTICATION
+
+Implement: - Google Sign-In. - Supabase OAuth. - Guest Mode. - Session
+persistence. - Automatic session restoration. - Logout. - Profile
+retrieval.
+
+Use a secure browser-based OAuth flow with Android deep links and PKCE
+where supported by the selected authentication implementation.
+
+Never simulate successful authentication.
+
+Use only the Supabase publishable/anon key. Never embed service_role
+credentials in the application.
+
+B. DASHBOARD
+
+Implement: - Main navigation. - Now Playing. - Current song
+information. - Quick music controls. - Vinyl record display. - Recently
+played. - The Crate shortcut. - Poster shortcut. - Profile shortcut.
+
+C. GRAMOPHONE MUSIC PLAYER
+
+Use Android Media3 / ExoPlayer.
+
+Implement: - Play. - Pause. - Previous. - Next. - Seek bar. - Volume. -
+Mute. - Shuffle. - Repeat. - Playback duration. - Current playback
+position. - Animated vinyl record. - Album artwork. - Song title. -
+Artist. - Next Queue. - Audio focus handling.
+
+All playback controls must operate on the actual playback engine. The
+vinyl animation must follow the real playback state. Do not create fake
+playback animations.
+
+D. BACKGROUND PLAYBACK AND AUDIO INTERRUPTION MANAGEMENT
+
+This is a critical requirement.
+
+Chiroot must have a reliable native Android background playback
+architecture.
+
+Music playback must not depend on the MainActivity lifecycle.
+
+Use Android Media3 with MediaSession and an appropriate
+MediaSessionService architecture.
+
+BACKGROUND PLAYBACK: - Continue playback when the user leaves Chiroot. -
+Continue playback when the screen is locked. - Maintain playback when
+navigating between application screens. - Display Android media
+notifications. - Provide lock-screen media controls. - Support Bluetooth
+headset controls. - Support Android media button events. - Restore
+playback state when returning to the application. - Avoid unnecessary
+player recreation. - Avoid multiple simultaneous player instances.
+
+AUDIO FOCUS MANAGEMENT:
+
+Implement proper Android AudioFocusRequest handling.
+
+Handle: - Audio focus granted. - Transient audio focus loss. - Permanent
+audio focus loss. - Audio focus gain. - Audio ducking. - Audio
+interruption recovery.
+
+Expected behavior: - Pause or duck music appropriately when another
+application requests audio focus. - Resume playback after eligible
+transient interruptions when appropriate. - Do not automatically resume
+after permanent audio focus loss unless explicitly appropriate. -
+Restore the previous volume after ducking ends. - Avoid abrupt volume
+changes.
+
+HEADPHONE AND BLUETOOTH EVENTS:
+
+Handle: - Wired headphone disconnection. - Bluetooth audio
+disconnection. - Bluetooth output changes. - Audio device availability
+changes.
+
+When headphones are disconnected, pause playback automatically. When a
+Bluetooth device disconnects, handle the playback state safely. Do not
+automatically start playback on a newly connected device without an
+appropriate user action.
+
+PHONE CALLS AND SYSTEM INTERRUPTIONS:
+
+Handle interruptions from: - Incoming phone calls. - Other
+applications. - Navigation audio. - Voice assistants. - System audio
+events.
+
+Prioritize Android audio focus rules. Do not attempt to bypass Android
+operating-system audio restrictions.
+
+MEDIA SESSION:
+
+Implement: - MediaSession. - PlaybackState. - MediaMetadata. -
+Notification controls. - Previous/next commands. - Play/pause
+commands. - Seek commands.
+
+The notification must display: - Song title. - Artist. - Album
+artwork. - Playback controls.
+
+Use the appropriate Android foreground service configuration and
+notification permissions for supported Android versions.
+
+AUDIO RESOURCE MANAGEMENT: - Release resources correctly. - Handle
+lifecycle transitions. - Prevent duplicate playback engines. - Avoid
+unnecessary memory usage. - Handle network playback failures. - Recover
+gracefully from temporary streaming failures.
+
+Never promise uninterrupted playback when Android or another application
+legitimately takes audio focus. The goal is stable playback, correct
+interruption handling, and seamless background listening.
+
+E. THE CRATE
+
+Implement: - Cloud music library. - Search. - Sort. - Song details. -
+Recently played. - Next Queue. - Remove songs. - Play selected songs. -
+Queue management.
+
+Retrieve actual data from Supabase.
+
+F. ADD MUSIC
+
+Allow users to: - Select MP3 files. - Enter song title. - Enter
+artist. - Select cover artwork. - Customize vinyl label color. -
+Customize vinyl appearance. - Upload audio files. - Save metadata. -
+View upload progress. - Cancel uploads where supported. - Retry failed
+uploads.
+
+Use Supabase Storage and Database. Validate files and handle duplicates.
+Never report an unsuccessful upload as successful.
+
+G. QUICK AUTO-FILL
+
+Preserve the original Quick Auto-fill functionality where feasible.
+
+Use supported metadata APIs. Do not scrape websites or bypass access
+restrictions. Always provide manual metadata entry.
+
+H. POSTER GENERATOR
+
+Preserve: - Share Now Spinning. - Automatic poster generation. -
+Redraw. - Copy. - Download SVG. - Song title. - Artist. - Cover
+artwork. - Chiroot branding.
+
+Use Android Canvas. Generate valid standalone SVG files
+programmatically. Do not use WebView. Support Android native sharing and
+file-saving APIs.
+
+I. LISTENING REPORT
+
+Display: - Total listening time. - Most played songs. - Favorite
+songs. - Monthly statistics. - Listening history. - Top tracks.
+
+Use real playback history stored in Supabase. Do not generate fake
+statistics.
+
+J. LYRICS
+
+Implement: - Lyrics display. - Song association. - Scrolling. - Empty
+state when unavailable.
+
+Never invent lyrics.
+
+K. BLUETOOTH AND AUDIO OUTPUT
+
+Use Android-supported audio routing APIs. Display available output
+devices when the platform exposes them. Support compatible Bluetooth
+audio devices. Do not claim to control hardware ANC without appropriate
+device support.
+
+L. PROFILE
+
+Implement: - Profile picture. - Display name. - Description. - Banner. -
+Edit profile. - Save changes. - Logout.
+
+Persist profile data through Supabase.
+
+M. SETTINGS
+
+Implement: - Account settings. - Audio settings. - Audio processing. -
+Backup. - Restore ZIP. - Reset Crate. - Patch Notes. - Credits. -
+Logout.
+
+Provide confirmation dialogs for destructive actions. Do not include
+authentication tokens in backups.
+
+4.  PLAYBACK AUDIO PROCESSING
+
+Implement optional playback audio processing.
+
+This is intended to improve music playback, not microphone capture.
+
+IMPORTANT TECHNICAL DISTINCTION: Android NoiseSuppressor,
+AcousticEchoCanceler, and AutomaticGainControl are primarily audio
+capture effects. Do not incorrectly attach them to ExoPlayer playback
+and claim that they provide playback noise cancellation.
+
+Research and implement a compatible playback DSP solution.
+
+Consider: - Media3 AudioProcessor. - PCM processing. - Compatible DSP
+libraries. - Audio output compatibility. - Device limitations.
+
+Requirements: - Optional audio processing toggle. - Processing status. -
+Supported/unsupported device indication. - Low latency. - Minimal
+battery consumption. - No excessive audio distortion. - Proper
+integration with ExoPlayer. - Graceful fallback.
+
+If true environmental noise cancellation requires headphone hardware,
+explain that limitation clearly. Never display a fake active status.
+
+5.  SUPABASE BACKEND
+
+Use Supabase for: - Authentication. - Database. - Music storage. - Cover
+artwork. - Profile images. - Listening history. - User settings.
+
+Suggested tables:
+
+PROFILES - id - display_name - avatar_url - bio - banner_url -
+created_at - updated_at
+
+SONGS - id - user_id - title - artist - audio_url - cover_url -
+vinyl_color - duration - created_at
+
+LISTENING_HISTORY - id - user_id - song_id - played_at - duration_played
+
+USER_SETTINGS - id - user_id - settings_json - updated_at
+
+Implement: - Primary keys. - Foreign keys. - Indexes. - Row Level
+Security. - Ownership policies. - Storage policies.
+
+Use private storage and signed URLs where appropriate. Document all SQL
+migrations.
+
+6.  ANDROID ARCHITECTURE
+
+Keep the main application implementation in MainActivity.java.
+
+Organize it using clearly labeled sections: 1. Constants. 2.
+Initialization. 3. Supabase. 4. Authentication. 5. Navigation. 6.
+Dashboard. 7. Music player. 8. Media session integration. 9. The Crate.
+10. Add Music. 11. Poster Generator. 12. Listening Report. 13. Lyrics.
+14. Profile. 15. Settings. 16. Audio processing. 17. Backup and restore.
+18. Utilities.
+
+Use asynchronous network and storage operations. Never block the main
+thread.
+
+Handle: - Android lifecycle. - Permissions. - Network failures. -
+Session expiration. - Audio focus. - Background playback. -
+Configuration changes.
+
+7.  GITHUB ACTIONS
+
+Create: .github/workflows/android-build.yml
+
+The workflow must: 1. Checkout repository. 2. Configure JDK. 3.
+Configure Android SDK. 4. Configure Gradle. 5. Build application. 6. Run
+available tests. 7. Generate debug APK. 8. Upload APK as an artifact.
+
+Support manual workflow execution.
+
+Expected APK: app/build/outputs/apk/debug/app-debug.apk
+
+Document GitHub Secrets: - SUPABASE_URL - SUPABASE_ANON_KEY -
+SUPABASE_REDIRECT_URI
+
+Never expose service_role keys or signing passwords.
+
+Support signed release builds using protected GitHub Secrets if
+implemented.
+
+8.  README.md
+
+Create a complete beginner-friendly README.
+
+Include: - Project introduction. - Feature overview. - Requirements. -
+Installation. - Android Studio setup. - JDK setup. - Gradle setup. -
+Supabase project creation. - Database configuration. - SQL migrations. -
+Storage bucket setup. - RLS policies. - Google OAuth configuration. -
+Google Cloud project setup. - OAuth consent screen. - OAuth
+credentials. - Supabase Google provider. - Android redirect URI. - Deep
+link configuration. - GitHub Actions setup. - GitHub Secrets. - APK
+download. - Release builds. - Troubleshooting.
+
+Also explain: - Background playback architecture. - MediaSession. -
+Audio focus handling. - Audio processing limitations.
+
+9.  TESTING AND QUALITY ASSURANCE
+
+Verify: - Application launches. - No WebView exists. - Website is not
+required. - Google authentication works. - Sessions persist. - Music
+uploads. - Music appears in The Crate. - Music playback works. -
+Background playback works. - Screen lock does not unnecessarily stop
+music. - Notification controls work. - Lock-screen controls work. -
+Bluetooth controls work. - Audio focus handling works. - Headphone
+disconnection pauses playback. - Audio interruption recovery works. -
+Vinyl animation matches playback. - Poster generation works. - SVG
+export works. - Sharing works. - Listening statistics use actual data. -
+Profile updates persist. - Backup and restore work. - Audio processing
+is correctly implemented. - GitHub Actions builds successfully.
+
+Test on Android 10 and newer.
+
+Do not claim a feature is tested if it has not actually been tested.
+
+10. DEVELOPMENT PHASES
+
+Execute in this order:
+
+Phase 1: Website research and feature mapping.
+
+Phase 2: Native Android project foundation.
+
+Phase 3: Supabase configuration and authentication.
+
+Phase 4: Native UI replication.
+
+Phase 5: Music player and Media3 integration.
+
+Phase 6: Background playback and MediaSession.
+
+Phase 7: Audio focus and interruption handling.
+
+Phase 8: The Crate and cloud music uploads.
+
+Phase 9: Poster Generator.
+
+Phase 10: Listening Report, Lyrics, Profile and Settings.
+
+Phase 11: Playback DSP implementation.
+
+Phase 12: GitHub Actions.
+
+Phase 13: README documentation.
+
+Phase 14: Full testing and bug fixing.
+
+11. FINAL DELIVERY
+
+Deliver a complete Android Studio project.
+
+Expected structure:
+
+Chiroot-Android/ - app/ - src/main/java/…/MainActivity.java -
+src/main/res/ - src/main/AndroidManifest.xml - build.gradle -
+.github/workflows/android-build.yml - supabase/migrations/ -
+build.gradle - settings.gradle - gradle.properties - .gitignore -
+README.md
+
+Additional configuration files are allowed. Avoid unnecessary additional
+Java source files.
+
+The final application must be: - Native Android. - Pure Java. - Single
+MainActivity.java application architecture. - Android 10+ compatible. -
+Visually consistent with Chiroot. - Supabase integrated. - Google OAuth
+enabled. - Cloud music enabled. - Fully functional music player. -
+Background playback capable. - Audio focus aware. - Properly handling
+audio interruptions. - Equipped with poster generation. - Equipped with
+playback audio processing. - Buildable through GitHub Actions. - Fully
+documented.
+
+
+12. CONNECTION ERROR MODAL AND ERROR ILLUSTRATION
+
+Implement a consistent native Android error modal for connection failures and server outages.
+
+Use the supplied edited error illustration as the visual asset:
+`chiroot_error_sign.png`
+
+The supplied illustration contains the exact message:
+"something went wrong."
+"Pls try again later alright :>"
+
+Add the image to the Android project, preferably:
+`app/src/main/res/drawable-nodpi/chiroot_error_sign.png`
+
+If the provided image is available as an uploaded attachment, use that exact image asset. Do not substitute an unrelated illustration, and do not recreate or rewrite the text inside the image. Preserve the supplied artwork and its wording.
+
+ERROR MODAL BEHAVIOR
+
+Show a custom native Android dialog/modal when:
+- The device has no usable network connection and an operation requires the internet.
+- A Supabase request fails because the server is unavailable.
+- The backend returns a server-side 5xx error.
+- A request times out.
+- A required cloud upload or download fails because of a connection/server problem.
+
+The modal should:
+- Display the supplied error illustration prominently.
+- Use Chiroot's existing visual theme.
+- Have a clear, friendly layout.
+- Include a primary "Try Again" action.
+- Include a secondary "Close" or dismiss action.
+- Be responsive on different Android screen sizes.
+- Use native Java Android Views and Dialog/DialogFragment-compatible native UI; do not use WebView.
+- Avoid covering the entire app unnecessarily if a compact modal is more appropriate.
+
+RETRY BEHAVIOR
+
+"Try Again" must genuinely retry the failed operation, not merely close the dialog or reload the screen.
+
+Preserve enough information about the failed operation to retry it safely.
+
+Examples:
+- Retry loading the music library.
+- Retry fetching the profile.
+- Retry uploading a selected music file.
+- Retry loading listening history.
+
+Do not duplicate uploads, database inserts, or other non-idempotent operations when retrying. Use safe retry logic, idempotency where appropriate, and verify the operation's result.
+
+ERROR HANDLING RULES
+
+- Use Android ConnectivityManager / NetworkCapabilities as an initial connectivity hint, not as proof that the Supabase server is reachable.
+- Handle actual HTTP/network exceptions and Supabase response errors.
+- Distinguish network errors, timeouts, server errors, authentication/session errors, permission errors, and user-input validation errors.
+- Show this connection/server modal for connection and server availability failures.
+- Do not show this generic modal for normal validation errors, incorrect passwords, cancelled Google OAuth, or expected user actions. Show a relevant inline message or specific error instead.
+- Avoid showing repeated stacked dialogs for multiple failures. Update or reuse the existing modal.
+- Do not show the modal for every background polling failure; use sensible retry/backoff and surface errors when they affect a user-requested action.
+- Do not expose raw stack traces, access tokens, database internals, or sensitive server responses to users.
+- Log useful diagnostic details safely for debugging, without logging secrets.
+- If the user is offline, explain that an internet connection is required for the requested cloud operation.
+- If the server is unavailable, let the user retry later.
+- Keep locally available UI usable where possible even when cloud services are unavailable.
+
+The error modal must be implemented once as a reusable component/helper inside MainActivity.java, consistent with the single-Java-file architecture.
+
+If the application architecture requires a service to report an error to the UI, communicate safely through the existing application state/event mechanism. Do not attempt to display an Activity dialog directly from a background service.
+
+Add the error illustration and error modal to the testing checklist. Verify offline mode, request timeout, server 5xx response, retry success, retry failure, and dismiss behavior.
+
+
+FINAL INSTRUCTION
+
+Do not merely provide a project proposal or tutorial.
+
+Actually implement the project and generate the necessary files if your
+environment supports it.
+
+Inspect the original website before implementation.
+
+Prioritize: 1. Functional correctness. 2. Visual accuracy. 3. Reliable
+playback. 4. Correct Android architecture. 5. Secure Supabase
+integration. 6. Maintainable Java code. 7. Successful APK compilation.
+
+If a requested feature is technically impossible or restricted by
+Android, explain the limitation and implement the closest technically
+correct alternative.
+
+Never use fake functionality or pretend that an unimplemented feature
+works.
+
+The result must feel like an official native Android release of Chiroot.
